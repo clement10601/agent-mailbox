@@ -3,7 +3,7 @@ import type { StoreContext } from "./audit";
 /**
  * Deletes rows whose expires_at has passed (expires_at <= now, matching the read side where a
  * row is live only while expires_at > now). NULL expires_at is never deleted. Tombstones are
- * ordinary rows and expire with everything else. MCP session bindings expire the same way. At most `batch` rows are deleted per table.
+ * ordinary rows and expire with everything else (under MESSAGE_TTL_DAYS=0, ack gives them a 7-day expiry). MCP session bindings expire the same way. At most `batch` rows are deleted per table.
  */
 export async function cleanup(
   ctx: StoreContext,

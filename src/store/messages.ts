@@ -8,6 +8,8 @@ const MAX_SUBJECT_CHARS = 200;
 const MAX_BODY_BYTES = 32_768;
 const MAX_DATA_BYTES = 65_536;
 const MAX_ACK_IDS = 50;
+/** Lifetime of a DELETE_ON_ACK tombstone that has no expiry of its own (MESSAGE_TTL_DAYS=0). */
+const TOMBSTONE_TTL_MS = 7 * DAY_MS;
 const enc = new TextEncoder();
 
 export interface SendInput {
@@ -227,10 +229,18 @@ export async function ack(
     }
     acked.push(id);
     if (row.acked_at !== null) continue; // already acked: idempotent
-    const sql = ctx.config.deleteOnAck
-      ? "UPDATE messages SET subject = NULL, body = NULL, data = NULL, acked_at = ? WHERE id = ? AND to_agent = ? AND acked_at IS NULL"
-      : "UPDATE messages SET acked_at = ? WHERE id = ? AND to_agent = ? AND acked_at IS NULL";
-    stmts.push(ctx.db.prepare(sql).bind(now, id, me));
+    // A tombstone keeps the message's own expiry; under MESSAGE_TTL_DAYS=0 (NULL expiry) it gets
+    // TOMBSTONE_TTL_MS so metadata is not kept forever.
+    stmts.push(
+      ctx.config.deleteOnAck
+        ? ctx.db
+            .prepare(
+              `UPDATE messages SET subject = NULL, body = NULL, data = NULL, acked_at = ?, expires_at = COALESCE(expires_at, ?)
+               WHERE id = ? AND to_agent = ? AND acked_at IS NULL`
+            )
+            .bind(now, now + TOMBSTONE_TTL_MS, id, me)
+        : ctx.db.prepare("UPDATE messages SET acked_at = ? WHERE id = ? AND to_agent = ? AND acked_at IS NULL").bind(now, id, me)
+    );
   }
   stmts.push(auditStatement(ctx, "ack", me, acked.length ? acked.join(",") : null));
   await ctx.db.batch(stmts);

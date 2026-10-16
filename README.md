@@ -59,7 +59,7 @@
 
 ### `DELETE_ON_ACK=true` 的實際行為
 
-`ack` 時立即清除 `subject`、`body`、`data`，但**保留 metadata**（寄件者、收件者、討論串、時間）直到信件到期，這樣之後的回覆仍能接在同一個討論串。若要連 metadata 也盡早消失，請調低 `MESSAGE_TTL_DAYS`。`false` 時 `ack` 只標記已讀，整封信保留到期限。
+`ack` 時立即清除 `subject`、`body`、`data`，但**保留 metadata**（寄件者、收件者、討論串、時間）直到信件到期，這樣之後的回覆仍能接在同一個討論串。若要連 metadata 也盡早消失，請調低 `MESSAGE_TTL_DAYS`。`MESSAGE_TTL_DAYS=0` 時，這種只剩 metadata 的紀錄在 `ack` 後保留 7 天再刪除。`false` 時 `ack` 只標記已讀，整封信保留到期限。
 
 ## 自架步驟
 
@@ -100,7 +100,7 @@ Cron（每小時，`0 * * * *`）會清理到期的信件與稽核紀錄，每�
 | 名稱 | 預設 | 說明 |
 |---|---|---|
 | `DELETE_ON_ACK` | `true` | `true`：`ack` 即清除 subject／body／data（保留 metadata 到期）。`false`：`ack` 只標記已讀，整封保留到期限。 |
-| `MESSAGE_TTL_DAYS` | `7` | 信件與紀錄保存天數；`0` 表示不因時間刪除。 |
+| `MESSAGE_TTL_DAYS` | `7` | 信件與紀錄保存天數；`0` 表示不因時間刪除：未 ack 的信、被抑制的副本與稽核紀錄無限期保留，`DELETE_ON_ACK=true` 留下的 metadata 紀錄則在 `ack` 後 7 天刪除。 |
 | `MAX_UNREAD` | `10` | 每個 Agent 未讀上限，滿了拒收新信（`inbox_full`）。 |
 | `AUDIT_LOG_BODIES` | `false` | 稽核紀錄是否包含內文。 |
 | `BLOCKED_SENDER_FEEDBACK` | `silent` | `silent`：被封鎖仍回「已送出」（見上方隱私影響）。`reject`：回 `blocked`。 |

@@ -59,6 +59,40 @@ describe("cleanup", () => {
     expect(await count("messages")).toBe(0);
   });
 
+  it("with ttlDays=0, tombstones expire 7 days after ack while unacked messages stay", async () => {
+    const { store, clock } = await setup({ ttlDays: 0, deleteOnAck: true });
+    const acked = await store.send("a", msg("b"));
+    const kept = await store.send("a", msg("b"));
+    const ackedAt = clock.now;
+    await store.ack("b", [acked.id]);
+    const row = await env.DB.prepare("SELECT expires_at FROM messages WHERE id = ?").bind(acked.id).first<{ expires_at: number | null }>();
+    expect(row!.expires_at).toBe(ackedAt + 7 * DAY);
+    clock.advance(7 * DAY - 1);
+    expect((await store.cleanup()).messages).toBe(0);
+    clock.advance(2); // 7 days + 1 ms after the ack
+    expect((await store.cleanup()).messages).toBe(1);
+    const left = await env.DB.prepare("SELECT id, expires_at FROM messages").all<{ id: string; expires_at: number | null }>();
+    expect(left.results).toEqual([{ id: kept.id, expires_at: null }]);
+  });
+
+  it("with a TTL, ack keeps the message's own expiry for its tombstone", async () => {
+    const { store, clock } = await setup({ ttlDays: 3, deleteOnAck: true });
+    const sentAt = clock.now;
+    const { id } = await store.send("a", msg("b"));
+    clock.advance(DAY);
+    await store.ack("b", [id]);
+    const row = await env.DB.prepare("SELECT expires_at FROM messages WHERE id = ?").bind(id).first<{ expires_at: number }>();
+    expect(row!.expires_at).toBe(sentAt + 3 * DAY);
+  });
+
+  it("with ttlDays=0, suppressed rows keep a NULL expiry like normal messages", async () => {
+    const { store } = await setup({ ttlDays: 0 });
+    await store.block("b", "a");
+    await store.send("a", msg("b"));
+    const row = await env.DB.prepare("SELECT suppressed, expires_at FROM messages").first();
+    expect(row).toEqual({ suppressed: 1, expires_at: null });
+  });
+
   it("deletes expired audit rows", async () => {
     const { store, clock } = await setup();
     await store.audit("x", "a", "b");
