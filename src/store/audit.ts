@@ -8,6 +8,24 @@ export interface StoreContext {
   now: () => number;
 }
 
+export function auditStatement(
+  ctx: StoreContext,
+  event: string,
+  actor: string,
+  target: string | null,
+  subject: string | null = null,
+  body: string | null = null
+): D1PreparedStatement {
+  const ts = ctx.now();
+  const expiresAt = ctx.config.ttlDays > 0 ? ts + ctx.config.ttlDays * DAY_MS : null;
+  const storedBody = ctx.config.auditLogBodies ? body : null;
+  return ctx.db
+    .prepare(
+      "INSERT INTO audit_log (ts, event, actor, target, subject, body, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(ts, event, actor, target, subject, storedBody, expiresAt);
+}
+
 export async function audit(
   ctx: StoreContext,
   event: string,
@@ -16,13 +34,5 @@ export async function audit(
   subject: string | null = null,
   body: string | null = null
 ): Promise<void> {
-  const ts = ctx.now();
-  const expiresAt = ctx.config.ttlDays > 0 ? ts + ctx.config.ttlDays * DAY_MS : null;
-  const storedBody = ctx.config.auditLogBodies ? body : null;
-  await ctx.db
-    .prepare(
-      "INSERT INTO audit_log (ts, event, actor, target, subject, body, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(ts, event, actor, target, subject, storedBody, expiresAt)
-    .run();
+  await auditStatement(ctx, event, actor, target, subject, body).run();
 }

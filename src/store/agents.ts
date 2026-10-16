@@ -9,7 +9,7 @@ export function normalizeName(name: string): string {
   return String(name ?? "").trim().toLowerCase();
 }
 
-function validName(name: string): string {
+export function validName(name: string): string {
   const n = normalizeName(name);
   if (!NAME_RE.test(n)) {
     throw new MailboxError(

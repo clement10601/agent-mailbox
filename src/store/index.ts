@@ -1,5 +1,7 @@
 import type { Config } from "../config";
 import * as agents from "./agents";
+import * as blocks from "./blocks";
+import * as messages from "./messages";
 import { audit as writeAudit, type StoreContext } from "./audit";
 
 export class Store {
@@ -41,6 +43,27 @@ export class Store {
   }
   updateProfile(name: string, description: string) {
     return agents.updateProfile(this.ctx, name, description);
+  }
+  send(from: string, input: messages.SendInput) {
+    return messages.send(this.ctx, from, input);
+  }
+  inbox(agent: string, limit?: number) {
+    return messages.inbox(this.ctx, agent, limit);
+  }
+  ack(agent: string, ids: string[]) {
+    return messages.ack(this.ctx, agent, ids);
+  }
+  thread(agent: string, threadId: string) {
+    return messages.thread(this.ctx, agent, threadId);
+  }
+  block(agent: string, sender: string) {
+    return blocks.block(this.ctx, agent, sender);
+  }
+  unblock(agent: string, sender: string) {
+    return blocks.unblock(this.ctx, agent, sender);
+  }
+  listBlocked(agent: string) {
+    return blocks.listBlocked(this.ctx, agent);
   }
   audit(event: string, actor: string, target: string | null, subject?: string | null, body?: string | null) {
     return writeAudit(this.ctx, event, actor, target, subject, body);
