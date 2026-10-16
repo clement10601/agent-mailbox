@@ -100,3 +100,18 @@ describe("auditLog", () => {
     expect(await store.auditLog({})).toHaveLength(5);
   });
 });
+
+describe("mcp session bindings", () => {
+  it("binds, reads back, and expires after 30 days", async () => {
+    const { store, clock } = makeStore();
+    await store.bindSession("s1", "agent:a");
+    expect(await store.sessionPrincipal("s1")).toBe("agent:a");
+    expect(await store.sessionPrincipal("nope")).toBeNull();
+    // A stored binding is never overwritten by a later identity.
+    await store.bindSession("s1", "admin");
+    expect(await store.sessionPrincipal("s1")).toBe("agent:a");
+    clock.advance(31 * 86_400_000);
+    expect(await store.sessionPrincipal("s1")).toBeNull();
+    expect((await store.cleanup()).sessions).toBe(1);
+  });
+});

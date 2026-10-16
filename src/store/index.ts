@@ -4,6 +4,7 @@ import * as blocks from "./blocks";
 import * as messages from "./messages";
 import { audit as writeAudit, auditLog, type StoreContext } from "./audit";
 import { cleanup } from "./cleanup";
+import * as sessions from "./sessions";
 
 export class Store {
   private ctx: StoreContext;
@@ -71,6 +72,12 @@ export class Store {
   }
   auditLog(q: { since?: number; agent?: string; limit?: number }) {
     return auditLog(this.ctx, q);
+  }
+  bindSession(id: string, principal: string) {
+    return sessions.bindSession(this.ctx, id, principal);
+  }
+  sessionPrincipal(id: string) {
+    return sessions.sessionPrincipal(this.ctx, id);
   }
   cleanup(batch?: number) {
     return cleanup(this.ctx, batch);

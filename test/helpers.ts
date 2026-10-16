@@ -18,7 +18,7 @@ export interface Clock {
 
 export async function clearAll(db: D1Database): Promise<void> {
   await db.batch(
-    ["audit_log", "blocks", "messages", "keys", "agents"].map((t) => db.prepare(`DELETE FROM ${t}`))
+    ["mcp_sessions", "audit_log", "blocks", "messages", "keys", "agents"].map((t) => db.prepare(`DELETE FROM ${t}`))
   );
 }
 

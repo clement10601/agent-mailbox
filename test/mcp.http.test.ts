@@ -165,6 +165,97 @@ describe("/mcp over HTTP", () => {
   });
 });
 
+describe("session binding", () => {
+  async function twoAgents() {
+    // Real clock: messages written here are read back by the worker, which uses Date.now().
+    const { store } = makeStore({}, Date.now());
+    const a = await store.createAgent("alpha", "");
+    const b = await store.createAgent("beta", "");
+    return { store, a, b };
+  }
+
+  it("agent B's key on agent A's session is rejected and cannot act as A", async () => {
+    const { store, a, b } = await twoAgents();
+    const ca = new Client(a.key);
+    await ca.init();
+    await store.send("beta", { to: "alpha", subject: "for alpha", body: "x" });
+    const [pending] = await store.inbox("alpha");
+
+    const spoof = new Client(b.key);
+    spoof.sessionId = ca.sessionId;
+    const r1 = await spoof.post({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "send_message", arguments: { to: "beta", subject: "spoof", body: "x" } },
+    });
+    expect(r1.status).toBe(404);
+    await r1.text();
+    const r2 = await spoof.post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ack", arguments: { ids: [pending.id] } } });
+    expect(r2.status).toBe(404);
+    await r2.text();
+
+    expect(await store.inbox("beta")).toHaveLength(0);
+    const sentAsAlpha = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE from_agent = 'alpha'").first<{ n: number }>();
+    expect(sentAsAlpha?.n).toBe(0);
+
+    // The legitimate owner keeps working in its session; the message was not acked.
+    const inbox = await ca.call("check_inbox", {});
+    expect(inbox.isError).toBe(false);
+    expect(inbox.value.messages.map((m: { id: string }) => m.id)).toEqual([pending.id]);
+  });
+
+  it("an agent key on an admin session is rejected", async () => {
+    const { a } = await twoAgents();
+    const admin = new Client("test-admin-key");
+    await admin.init();
+    const spoof = new Client(a.key);
+    spoof.sessionId = admin.sessionId;
+    const res = await spoof.post({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("admin_");
+    const r2 = await spoof.post({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "admin_create_agent", arguments: { name: "evil" } },
+    });
+    expect(r2.status).toBe(404);
+    await r2.text();
+    expect(await env.DB.prepare("SELECT 1 FROM agents WHERE name = 'evil'").first()).toBeNull();
+    // Admin continues to work.
+    expect(await admin.toolNames()).toContain("admin_create_agent");
+  });
+
+  it("the admin key on an agent session is rejected", async () => {
+    const { a } = await twoAgents();
+    const ca = new Client(a.key);
+    await ca.init();
+    const spoof = new Client("test-admin-key");
+    spoof.sessionId = ca.sessionId;
+    const res = await spoof.post({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    expect(res.status).toBe(404);
+    await res.text();
+  });
+
+  it("a session id we never bound is rejected even with a valid key", async () => {
+    const { a } = await twoAgents();
+    const c = new Client(a.key);
+    c.sessionId = "0".repeat(64);
+    const res = await c.post({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    expect(res.status).toBe(404);
+    await res.text();
+  });
+
+  it("the binding is stored outside the session object, keyed by the session id", async () => {
+    const { a } = await twoAgents();
+    const c = new Client(a.key);
+    await c.init();
+    const row = await env.DB.prepare("SELECT principal FROM mcp_sessions WHERE id = ?").bind(c.sessionId).first<{ principal: string }>();
+    expect(row?.principal).toBe("agent:alpha");
+  });
+});
+
 describe("routing", () => {
   it("unknown paths 404", async () => {
     const res = await SELF.fetch("https://x/elsewhere");

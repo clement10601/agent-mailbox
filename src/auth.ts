@@ -43,3 +43,8 @@ export async function activateIdentity(identity: Identity, store: Store): Promis
   await store.touch(identity.agent);
   return true;
 }
+
+/** Stable string form of an identity, used to bind MCP sessions to the identity that created them. */
+export function principalOf(identity: Identity): string {
+  return identity.role === "admin" ? "admin" : `agent:${identity.agent}`;
+}

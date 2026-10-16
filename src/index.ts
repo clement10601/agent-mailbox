@@ -1,7 +1,7 @@
 import type { Env } from "./env";
 import { parseConfig } from "./config";
 import { Store } from "./store";
-import { AdminKeyMissingError, activateIdentity, authenticateBearer, type Identity } from "./auth";
+import { AdminKeyMissingError, activateIdentity, authenticateBearer, principalOf, type Identity } from "./auth";
 import { fromBinding } from "./ratelimit";
 import { MailboxMCP } from "./mcp";
 
@@ -44,9 +44,35 @@ export async function handleMcp(request: Request, env: Env, ctx: ExecutionContex
     return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
   }
 
+  // McpAgent only applies props when a session object first starts (and restores the stored ones after
+  // eviction), so it cannot be trusted to follow the presenting key. Each session is therefore bound to its
+  // creator in D1 and every request must present a key for that same identity. Mismatches and unknown
+  // sessions both get the same 404 the MCP transport uses for unknown sessions, so nothing leaks.
+  const principal = principalOf(identity);
+  const sessionId = request.headers.get("mcp-session-id");
+  try {
+    if (sessionId !== null && (await store.sessionPrincipal(sessionId)) !== principal) {
+      return json(404, { jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null });
+    }
+  } catch (e) {
+    console.error("auth: session lookup failed", e);
+    return json(500, { error: "internal" });
+  }
+
   // McpAgent.serve reads the identity from ctx.props (OAuthProvider sets it the same way).
   (ctx as unknown as { props: Identity }).props = identity;
-  return mcpHandler.fetch(request, env, ctx);
+  const res = await mcpHandler.fetch(request, env, ctx);
+  const created = res.headers.get("mcp-session-id");
+  if (sessionId === null && created !== null && res.ok) {
+    try {
+      await store.bindSession(created, principal);
+    } catch (e) {
+      console.error("auth: could not bind new session", e);
+      await res.body?.cancel();
+      return json(500, { error: "internal" });
+    }
+  }
+  return res;
 }
 
 export default {
