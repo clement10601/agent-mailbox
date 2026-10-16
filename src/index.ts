@@ -6,6 +6,7 @@ import {
   AUTH_RETRY_AFTER_SECONDS,
   AdminKeyMissingError,
   activateIdentity,
+  isDisabledAgentCredential,
   isLockedOut,
   authenticateBearer,
   principalOf,
@@ -45,7 +46,8 @@ export async function handleMcp(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
-  resolve: ResolveIdentity = authenticateBearer
+  resolve: ResolveIdentity = authenticateBearer,
+  countFailures = true
 ): Promise<Response> {
   const header = request.headers.get("Authorization");
   let identity: Identity | null;
@@ -53,19 +55,26 @@ export async function handleMcp(
   try {
     store = new Store(env.DB, parseConfig(env));
     identity = await resolve(header, env, store);
-    if (identity && !(await activateIdentity(identity, store))) identity = null;
+    let disabled = false;
+    if (identity && !(await activateIdentity(identity, store))) {
+      identity = null;
+      disabled = true;
+    }
+    if (!identity) {
+      // Not counted toward the lockout: no credentials at all (clients probe /mcp before authenticating),
+      // OAuth tokens (countFailures=false; they expire hourly and claude.ai connectors share egress IPs), and
+      // valid credentials whose agent is disabled. Only guessable static credentials are counted.
+      const counted =
+        header !== null && countFailures && !disabled && !(await isDisabledAgentCredential(header, store));
+      if (counted && !(await recordAuthFailure(request, fromBinding(env.AUTH_LIMITER), store))) {
+        return rateLimited();
+      }
+      return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
+    }
   } catch (e) {
     if (e instanceof AdminKeyMissingError) console.error("auth: ADMIN_KEY secret is not set; answering 500");
     else console.error("auth: internal error", e);
     return json(500, { error: "internal" });
-  }
-
-  if (!identity) {
-    // No credentials at all is not counted as a failed attempt (clients probe /mcp before authenticating).
-    if (header !== null && !(await recordAuthFailure(request, fromBinding(env.AUTH_LIMITER), store))) {
-      return rateLimited();
-    }
-    return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
   }
 
   // McpAgent only applies props when a session object first starts (and restores the stored ones after
@@ -110,7 +119,7 @@ function identityFromProps(props: unknown): Identity | null {
 const oauthApiHandler = {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const props = (ctx as unknown as { props?: unknown }).props;
-    return handleMcp(request, env, ctx, async () => identityFromProps(props));
+    return handleMcp(request, env, ctx, async () => identityFromProps(props), false);
   },
 };
 
@@ -189,21 +198,10 @@ export default {
     // The provider writes OAUTH_PROVIDER onto the env it is given; a per-request copy keeps helpers bound to
     // this request's origin instead of whichever origin happened to arrive first.
     const reqEnv: Env = { ...env, OAUTH_PROVIDER: undefined as unknown as Env["OAUTH_PROVIDER"] };
-    const res = await providerFor(url.origin).fetch(request, reqEnv, ctx);
-    if (mcp && header !== null && res.status === 401) {
-      // The provider rejected the token itself (unknown, expired, revoked). Count it like any other failure;
-      // recordAuthFailure is per-request idempotent, so failures already counted by handleMcp are not doubled.
-      try {
-        const store = new Store(env.DB, parseConfig(env));
-        if (!(await recordAuthFailure(request, fromBinding(env.AUTH_LIMITER), store))) {
-          await res.body?.cancel();
-          return rateLimited();
-        }
-      } catch (e) {
-        console.error("auth: could not record OAuth failure", e);
-      }
-    }
-    return res;
+    // A token the provider rejects itself (unknown, expired, revoked) gets its 401 and is not counted toward the
+    // lockout: access tokens expire hourly and claude.ai connectors share a few egress IPs, so counting them
+    // would lock every connector out. Provider tokens carry a random secret and are not guessable anyway.
+    return providerFor(url.origin).fetch(request, reqEnv, ctx);
   },
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     const store = new Store(env.DB, parseConfig(env));

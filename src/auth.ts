@@ -35,6 +35,16 @@ export async function authenticateBearer(header: string | null, env: Env, store:
 }
 
 /**
+ * True when the header carries a valid `amk_` key whose agent is disabled. Such a request is refused (401) but
+ * is not a guessing attempt, so it must not count toward the per-IP lockout.
+ */
+export async function isDisabledAgentCredential(header: string | null, store: Store): Promise<boolean> {
+  const m = header ? BEARER_RE.exec(header) : null;
+  if (!m || !m[1].startsWith("amk_")) return false;
+  return store.isDisabledAgentKey(m[1]);
+}
+
+/**
  * Per-request check for an already-resolved identity: an agent must still exist and be enabled;
  * records activity (`last_seen_at`, throttled by the store). Returns false if the identity is no longer valid.
  */

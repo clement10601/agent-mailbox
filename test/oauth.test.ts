@@ -355,13 +355,38 @@ describe("OAuth tokens on /mcp", () => {
     await res.text();
   });
 
-  it("a bogus OAuth-format token -> 401 and is audited as auth_failed", async () => {
+  it("invalid OAuth-format tokens -> 401 every time, never counted, so the IP is not locked out", async () => {
+    const { store } = makeStore();
+    const a = await store.createAgent("alpha", "");
     const ip = freshIp();
-    const res = await new Client("alpha:grant:secret", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
-    expect(res.status).toBe(401);
-    await res.text();
-    const row = await env.DB.prepare("SELECT actor FROM audit_log WHERE event = 'auth_failed'").first<{ actor: string }>();
-    expect(row?.actor).toBe(ip);
+    const statuses: number[] = [];
+    for (let i = 0; i < 15; i++) {
+      const res = await new Client("alpha:grant:secret", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      await res.text();
+      statuses.push(res.status);
+    }
+    expect(statuses).toEqual(Array(15).fill(401));
+    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
+    // A static key from the same (shared egress) IP still works.
+    const good = new Client(a.key, ip);
+    await good.init();
+    expect(await good.toolNames()).toContain("send_message");
+  });
+
+  it("a disabled agent's valid OAuth token -> 401 every time, never counted", async () => {
+    const { store } = makeStore();
+    await store.createAgent("alpha", "");
+    const token = await tokenFor("alpha");
+    await store.setDisabled("alpha", true);
+    const ip = freshIp();
+    const statuses: number[] = [];
+    for (let i = 0; i < 15; i++) {
+      const res = await new Client(token, ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      await res.text();
+      statuses.push(res.status);
+    }
+    expect(statuses).toEqual(Array(15).fill(401));
+    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
   });
 
   it("admin over Bearer sees grant counts and admin_revoke_oauth kills the token", async () => {

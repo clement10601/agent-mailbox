@@ -28,6 +28,9 @@ export class Store {
   resolveKey(rawKey: string) {
     return agents.resolveKey(this.ctx, rawKey);
   }
+  isDisabledAgentKey(rawKey: string) {
+    return agents.isDisabledAgentKey(this.ctx, rawKey);
+  }
   isActive(name: string) {
     return agents.isActive(this.ctx, name);
   }

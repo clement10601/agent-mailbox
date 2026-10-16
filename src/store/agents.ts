@@ -98,6 +98,18 @@ export async function resolveKey(ctx: StoreContext, rawKey: string): Promise<str
   return row?.name ?? null;
 }
 
+/** True when `rawKey` is an issued, unrevoked key whose agent is disabled. */
+export async function isDisabledAgentKey(ctx: StoreContext, rawKey: string): Promise<boolean> {
+  const row = await ctx.db
+    .prepare(
+      `SELECT 1 FROM keys k JOIN agents a ON a.name = k.agent_name
+       WHERE k.key_hash = ? AND k.revoked_at IS NULL AND a.disabled = 1`
+    )
+    .bind(await sha256Hex(rawKey))
+    .first();
+  return row !== null;
+}
+
 export async function isActive(ctx: StoreContext, name: string): Promise<boolean> {
   const row = await ctx.db
     .prepare("SELECT 1 FROM agents WHERE name = ? AND disabled = 0")

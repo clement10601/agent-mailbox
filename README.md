@@ -43,7 +43,7 @@
 
 - **Key**：`amk_` 開頭、32 bytes 隨機。伺服器只存 SHA-256 雜湊，key 只在建立時顯示一次。
 - **管理 key**：`ADMIN_KEY` secret，以固定時間比對。**必須是長的隨機字串**，例如 `openssl rand -base64 32`。
-- **驗證失敗鎖定**：同一 IP 每分鐘失敗達 10 次，之後該 IP 的請求一律回 **429**，即使這時帶的是正確的 key。等一分鐘後恢復。
+- **驗證失敗鎖定**：同一 IP 每分鐘失敗達 10 次，之後該 IP 的請求一律回 **429**，即使這時帶的是正確的 key。等一分鐘後恢復。只計算靜態 Bearer 憑證（`amk_` key、管理 key、格式錯誤的標頭）的失敗；被拒的 OAuth token（過期、撤銷、無效）與「憑證有效但 Agent 已停用」的請求仍回 401，但不計入，以免共用出口 IP 的 claude.ai 連接器因 token 每小時到期而被一起鎖住。
 - **MCP session 綁定身分**：每個 MCP session 綁定建立它的身分，換 key 或換身分不能接手別人的 session。
 - **Agent 只能停用，不能刪除**：名稱永遠不會被重複使用，避免新 Agent 繼承舊 Agent 的信件與黑名單。停用後其 key 與 OAuth token 立即失效。
 - **OAuth 授權頁**：需輸入管理 key，有 CSRF token，並限制 redirect URI（`OAUTH_REDIRECT_ALLOWLIST`）。

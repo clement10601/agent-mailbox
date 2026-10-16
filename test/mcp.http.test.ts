@@ -69,6 +69,37 @@ describe("/mcp over HTTP", () => {
     expect(await good.toolNames()).toContain("send_message");
   });
 
+  it("a disabled agent's valid key is 401 every time but never counts toward the lockout", async () => {
+    const { store } = makeStore();
+    const a = await store.createAgent("alpha", "");
+    const b = await store.createAgent("beta", "");
+    await store.setDisabled("alpha", true);
+    const ip = freshIp();
+    const statuses: number[] = [];
+    for (let i = 0; i < 15; i++) {
+      const res = await new Client(a.key, ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      await res.text();
+      statuses.push(res.status);
+    }
+    expect(statuses).toEqual(Array(15).fill(401));
+    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
+    const good = new Client(b.key, ip);
+    await good.init();
+    expect(await good.toolNames()).toContain("send_message");
+  });
+
+  it("a revoked key still counts as a failed attempt", async () => {
+    const { store } = makeStore();
+    const a = await store.createAgent("alpha", "");
+    await store.revokeKey(a.keyId);
+    const ip = freshIp();
+    const res = await new Client(a.key, ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    expect(res.status).toBe(401);
+    await res.text();
+    const row = await env.DB.prepare("SELECT actor FROM audit_log WHERE event = 'auth_failed'").first<{ actor: string }>();
+    expect(row?.actor).toBe(ip);
+  });
+
   it("a valid key used many times from one IP is never rate limited", async () => {
     const { store } = makeStore();
     const a = await store.createAgent("alpha", "");
