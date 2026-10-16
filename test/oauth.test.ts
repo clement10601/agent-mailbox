@@ -91,7 +91,7 @@ async function postForm(flow: Flow, cookie: string, fields: Record<string, strin
 
 async function authorize(flow: Flow, agentFields: Record<string, string>): Promise<string> {
   const { cookie, csrf } = await getForm(flow);
-  const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", ...agentFields });
+  const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", ...agentFields });
   expect(res.status).toBe(302);
   const loc = new URL(res.headers.get("Location")!);
   return loc.searchParams.get("code")!;
@@ -165,10 +165,10 @@ describe("/authorize", () => {
     await store.createAgent("alpha", "");
     const flow = await startFlow();
     const { cookie } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf: "not-the-token", admin_key: "test-admin-key", agent: "alpha" });
+    const res = await postForm(flow, cookie, { csrf: "not-the-token", admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
     expect(res.status).toBe(403);
     expectFrameHeaders(res);
-    const noCookie = await postForm(flow, "", { csrf: "", admin_key: "test-admin-key", agent: "alpha" });
+    const noCookie = await postForm(flow, "", { csrf: "", admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
     expect(noCookie.status).toBe(403);
   });
 
@@ -208,7 +208,7 @@ describe("/authorize", () => {
       expect(res.status).toBe(401);
       await res.text();
     }
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "alpha" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
     expect(res.status).toBe(429);
     expect(res.headers.get("Location")).toBeNull();
     await res.text();
@@ -221,7 +221,7 @@ describe("/authorize", () => {
     await store.createAgent("alpha", "");
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "alpha" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
     expect(res.status).toBe(302);
     expectFrameHeaders(res);
     const loc = res.headers.get("Location")!;
@@ -236,7 +236,7 @@ describe("/authorize", () => {
   it("a missing agent with the create checkbox is created and granted without revealing a key", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "Fresh-One", create: "1" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "Fresh-One", create: "1" });
     expect(res.status).toBe(302);
     const text = await res.text();
     expect(text).not.toContain("amk_");
@@ -249,7 +249,7 @@ describe("/authorize", () => {
   it("a missing agent without the create checkbox -> 400 'not found', nothing created or granted", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "nobody" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "nobody" });
     expect(res.status).toBe(400);
     expectFrameHeaders(res);
     const html = await res.text();
@@ -264,7 +264,7 @@ describe("/authorize", () => {
     await store.createAgent("alpha", "");
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "alpha", create: "1" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha", create: "1" });
     expect(res.status).toBe(302);
     const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM keys WHERE agent_name = 'alpha'").first<{ n: number }>();
     expect(n!.n).toBe(1);
@@ -273,7 +273,7 @@ describe("/authorize", () => {
   it("an invalid agent name -> 400", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "Bad Name!", create: "1" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "Bad Name!", create: "1" });
     expect(res.status).toBe(400);
     await res.text();
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM agents").first<{ n: number }>()).toEqual({ n: 0 });
@@ -286,7 +286,7 @@ describe("/authorize", () => {
     for (const extra of [{}, { create: "1" }] as Record<string, string>[]) {
       const flow = await startFlow();
       const { cookie, csrf } = await getForm(flow);
-      const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "gone", ...extra });
+      const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "gone", ...extra });
       expect(res.status).toBe(400);
       await res.text();
     }
@@ -395,7 +395,7 @@ describe("OAuth tokens on /mcp", () => {
     const token = await tokenFor("alpha");
     const grantId = token.split(":")[1];
 
-    const admin = new Client("test-admin-key");
+    const admin = new Client("test-admin-key-0123456789abcdef0123456789");
     await admin.init();
     const list = await admin.call("admin_list_agents", {});
     const alpha = list.value.agents.find((a: { name: string }) => a.name === "alpha");

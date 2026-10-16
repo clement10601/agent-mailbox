@@ -9,7 +9,7 @@ export default defineConfig(async () => {
         main: "./src/index.ts",
         wrangler: { configPath: "./wrangler.toml" },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations, ADMIN_KEY: "test-admin-key" },
+          bindings: { TEST_MIGRATIONS: migrations, ADMIN_KEY: "test-admin-key-0123456789abcdef0123456789" },
         },
       }),
     ],

@@ -11,6 +11,7 @@ import {
   authenticateBearer,
   principalOf,
   recordAuthFailure,
+  usableAdminKey,
   type Identity,
 } from "./auth";
 import { timingSafeEqual } from "./crypto";
@@ -72,7 +73,7 @@ export async function handleMcp(
       return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
     }
   } catch (e) {
-    if (e instanceof AdminKeyMissingError) console.error("auth: ADMIN_KEY secret is not set; answering 500");
+    if (e instanceof AdminKeyMissingError) console.error(`auth: ${e.message}; answering 500`);
     else console.error("auth: internal error", e);
     return json(500, { error: "internal" });
   }
@@ -168,7 +169,8 @@ async function isProviderToken(header: string | null, env: Env): Promise<boolean
   const m = header ? BEARER_RE.exec(header) : null;
   if (m === null || m[1].startsWith("amk_") || m[1].split(":").length !== 3) return false;
   // An admin key that happens to contain two colons must still take the Bearer path.
-  return !(typeof env.ADMIN_KEY === "string" && env.ADMIN_KEY !== "" && (await timingSafeEqual(m[1], env.ADMIN_KEY)));
+  const adminKey = usableAdminKey(env);
+  return !(adminKey !== null && (await timingSafeEqual(m[1], adminKey)));
 }
 
 function isMcpPath(pathname: string): boolean {

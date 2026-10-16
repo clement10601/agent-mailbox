@@ -2,7 +2,7 @@ import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
 import type { Env } from "./env";
 import type { Config } from "./config";
 import type { Store } from "./store";
-import { AUTH_RETRY_AFTER_SECONDS, isLockedOut, recordAuthFailure } from "./auth";
+import { AUTH_RETRY_AFTER_SECONDS, adminKeyProblem, isLockedOut, recordAuthFailure } from "./auth";
 import { randomToken, timingSafeEqual } from "./crypto";
 import { MailboxError } from "./errors";
 import { validName } from "./store/agents";
@@ -140,11 +140,12 @@ export async function handleAuthorize(request: Request, env: Env, store: Store, 
     return errorPage(403, "The form expired or was not submitted from this page. Reload and try again.");
   }
 
-  const adminKey = typeof env.ADMIN_KEY === "string" ? env.ADMIN_KEY : "";
-  if (adminKey === "") {
-    console.error("authorize: ADMIN_KEY secret is not set; answering 500");
+  const keyProblem = adminKeyProblem(env.ADMIN_KEY);
+  if (keyProblem !== null) {
+    console.error(`authorize: ${keyProblem}; answering 500`);
     return errorPage(500, "The server is not configured.");
   }
+  const adminKey = env.ADMIN_KEY;
   if (!(await timingSafeEqual(form.get("admin_key") ?? "", adminKey))) {
     if (!(await recordAuthFailure(request, fromBinding(env.AUTH_LIMITER), store))) return tooMany();
     return respond(401, await view(cookieToken, "Wrong admin key."));

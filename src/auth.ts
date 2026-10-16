@@ -5,12 +5,29 @@ import type { RateLimiter } from "./ratelimit";
 
 export type Identity = { role: "admin" } | { role: "agent"; agent: string };
 
-/** Thrown when ADMIN_KEY is unset; callers must answer 500 and log the reason. */
+/** ADMIN_KEY values shorter than this are treated as unset. */
+export const MIN_ADMIN_KEY_LENGTH = 32;
+
+/** Thrown when ADMIN_KEY is unset or too short; callers must answer 500 and log the reason. */
 export class AdminKeyMissingError extends Error {
-  constructor() {
-    super("ADMIN_KEY secret is not set; refusing to authenticate requests");
+  constructor(reason = "ADMIN_KEY secret is not set") {
+    super(`${reason}; refusing to authenticate requests`);
     this.name = "AdminKeyMissingError";
   }
+}
+
+/** Why ADMIN_KEY cannot be used, or null when it is usable. */
+export function adminKeyProblem(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return "ADMIN_KEY secret is not set";
+  if (value.length < MIN_ADMIN_KEY_LENGTH) {
+    return `ADMIN_KEY secret is shorter than ${MIN_ADMIN_KEY_LENGTH} characters; set a long random value`;
+  }
+  return null;
+}
+
+/** The configured admin key, or null when it is unset or too short (which must be treated as a server error). */
+export function usableAdminKey(env: Env): string | null {
+  return adminKeyProblem(env.ADMIN_KEY) === null ? env.ADMIN_KEY : null;
 }
 
 const BEARER_RE = /^Bearer[ \t]+(\S+)[ \t]*$/i;
@@ -18,11 +35,12 @@ const BEARER_RE = /^Bearer[ \t]+(\S+)[ \t]*$/i;
 /**
  * Resolves an `Authorization` header to an identity.
  * `Bearer <ADMIN_KEY>` -> admin; `Bearer amk_…` -> the key's (active, unrevoked) agent; anything else -> null.
- * Throws AdminKeyMissingError if ADMIN_KEY is not configured, whatever the header holds.
+ * Throws AdminKeyMissingError if ADMIN_KEY is not configured or shorter than MIN_ADMIN_KEY_LENGTH, whatever the header holds.
  */
 export async function authenticateBearer(header: string | null, env: Env, store: Store): Promise<Identity | null> {
-  const adminKey = typeof env.ADMIN_KEY === "string" ? env.ADMIN_KEY : "";
-  if (adminKey === "") throw new AdminKeyMissingError();
+  const problem = adminKeyProblem(env.ADMIN_KEY);
+  if (problem !== null) throw new AdminKeyMissingError(problem);
+  const adminKey = env.ADMIN_KEY;
   const m = header ? BEARER_RE.exec(header) : null;
   if (!m) return null;
   const token = m[1];

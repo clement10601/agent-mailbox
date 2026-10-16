@@ -19,7 +19,7 @@ describe("/mcp over HTTP", () => {
   });
 
   it("admin key lists only admin_ tools", async () => {
-    const c = new Client("test-admin-key");
+    const c = new Client("test-admin-key-0123456789abcdef0123456789");
     await c.init();
     const names = await c.toolNames();
     expect(names.length).toBeGreaterThan(0);
@@ -61,7 +61,7 @@ describe("/mcp over HTTP", () => {
     expect(locked.status).toBe(429);
     await locked.text();
     // The admin key is locked out too.
-    const admin = await new Client("test-admin-key", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    const admin = await new Client("test-admin-key-0123456789abcdef0123456789", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
     expect(admin.status).toBe(429);
     await admin.text();
     // Age the failures past the 60 s window: the valid key works again.
@@ -198,7 +198,7 @@ describe("session binding", () => {
 
   it("an agent key on an admin session is rejected", async () => {
     const { a } = await twoAgents();
-    const admin = new Client("test-admin-key");
+    const admin = new Client("test-admin-key-0123456789abcdef0123456789");
     await admin.init();
     const spoof = new Client(a.key);
     spoof.sessionId = admin.sessionId;
@@ -222,7 +222,7 @@ describe("session binding", () => {
     const { a } = await twoAgents();
     const ca = new Client(a.key);
     await ca.init();
-    const spoof = new Client("test-admin-key");
+    const spoof = new Client("test-admin-key-0123456789abcdef0123456789");
     spoof.sessionId = ca.sessionId;
     const res = await spoof.post({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     expect(res.status).toBe(404);
