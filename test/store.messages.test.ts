@@ -65,11 +65,37 @@ describe("send / inbox", () => {
     expect((await rej.store.send("a", msg("b"))).failed).toEqual([{ agent: "b", code: "blocked" }]);
   });
 
-  it("inbox_full, but silent block wins", async () => {
+  it("inbox_full looks the same to a silently blocked sender as to an unblocked one", async () => {
+    const run = async (blocked: boolean) => {
+      await resetDb();
+      const { store } = await setup();
+      if (blocked) await store.block("b", "a");
+      const seq: string[] = [];
+      for (let i = 0; i < 11; i++) {
+        const r = await store.send("a", msg("b"));
+        seq.push(r.delivered.length ? "delivered" : r.failed.map((f) => f.code).join(","));
+      }
+      const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE to_agent = 'b'").first<{ n: number }>();
+      return { seq, rows: rows!.n };
+    };
+    const open = await run(false);
+    const blocked = await run(true);
+    expect(open.seq).toEqual([...Array(10).fill("delivered"), "inbox_full"]);
+    expect(blocked).toEqual(open);
+  });
+
+  it("a blocked sender's fullness counts the recipient's visible unread plus its own suppressed rows", async () => {
     const { store } = await setup();
-    for (let i = 0; i < 10; i++) await store.send("a", msg("b"));
-    expect((await store.send("a", msg("b"))).failed).toEqual([{ agent: "b", code: "inbox_full" }]);
+    for (let i = 0; i < 6; i++) await store.send("c", msg("b"));
     await store.block("b", "a");
+    const seq: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await store.send("a", msg("b"));
+      seq.push(r.delivered.length ? "delivered" : r.failed[0].code);
+    }
+    expect(seq).toEqual(["delivered", "delivered", "delivered", "delivered", "inbox_full"]);
+    // The recipient acks its visible mail: the blocked sender sees space again, as an unblocked one would.
+    await store.ack("b", (await store.inbox("b")).map((m) => m.id));
     expect((await store.send("a", msg("b"))).delivered).toEqual(["b"]);
   });
 
@@ -276,11 +302,13 @@ describe("silent block does not leak", () => {
     expect(await store.inbox("b")).toHaveLength(1);
   });
 
-  it("silent block + full inbox still reports delivered", async () => {
+  it("silent block + full inbox reports inbox_full like an unblocked sender and writes no row", async () => {
     const { store } = await setup();
     for (let i = 0; i < 10; i++) await store.send("c", msg("b"));
     await store.block("b", "a");
-    expect((await store.send("a", msg("b"))).delivered).toEqual(["b"]);
+    expect((await store.send("a", msg("b"))).failed).toEqual([{ agent: "b", code: "inbox_full" }]);
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE from_agent = 'a'").first<{ n: number }>();
+    expect(n!.n).toBe(0);
     expect(await store.inbox("b")).toHaveLength(10);
   });
 });

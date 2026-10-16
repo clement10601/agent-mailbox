@@ -152,13 +152,17 @@ export async function send(
       }
       suppressed = 1; // silent: real row, invisible to the recipient
     }
-    const unread = suppressed ? null : await ctx.db
+    // Fullness is the recipient's visible unread. A silently blocked sender also counts its own live
+    // suppressed rows to this recipient, so it hits inbox_full exactly when it would if its mail were visible
+    // (otherwise "never inbox_full" would reveal the block).
+    const unread = await ctx.db
       .prepare(
-        "SELECT COUNT(*) AS n FROM messages WHERE to_agent = ? AND acked_at IS NULL AND suppressed = 0 AND (expires_at IS NULL OR expires_at > ?)"
+        `SELECT COUNT(*) AS n FROM messages WHERE to_agent = ? AND acked_at IS NULL
+         AND (suppressed = 0 OR (? = 1 AND from_agent = ?)) AND (expires_at IS NULL OR expires_at > ?)`
       )
-      .bind(r, now)
+      .bind(r, suppressed, from, now)
       .first<{ n: number }>();
-    if (!suppressed && (unread?.n ?? 0) >= ctx.config.maxUnread) {
+    if ((unread?.n ?? 0) >= ctx.config.maxUnread) {
       failed.push({ agent: r, code: "inbox_full" });
       continue;
     }
