@@ -5,6 +5,7 @@ import type { Store } from "./store";
 import { AUTH_RETRY_AFTER_SECONDS, isLockedOut, recordAuthFailure } from "./auth";
 import { randomToken, timingSafeEqual } from "./crypto";
 import { MailboxError } from "./errors";
+import { validName } from "./store/agents";
 import { fromBinding } from "./ratelimit";
 
 const CSRF_COOKIE = "__Host-csrf";
@@ -34,7 +35,8 @@ function shell(title: string, inner: string): string {
 <title>${escapeHtml(title)}</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
-label{display:block;margin-top:1rem;font-weight:600}input,select{width:100%;padding:.4rem;box-sizing:border-box}
+label{display:block;margin-top:1rem;font-weight:600}input{width:100%;padding:.4rem;box-sizing:border-box}
+label.check{font-weight:400}label.check input{width:auto;margin-right:.4rem}
 button{margin-top:1.5rem;padding:.5rem 1rem}.error{color:#b00020}.muted{color:#555}
 </style></head><body>${inner}</body></html>`;
 }
@@ -47,14 +49,11 @@ interface FormView {
   action: string;
   csrf: string;
   clientName: string;
-  agents: string[];
   error?: string;
 }
 
+/** The page shows nothing about existing agents: it is served before the admin key is checked. */
 function formPage(v: FormView): string {
-  const options = v.agents
-    .map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`)
-    .join("");
   return shell(
     "Authorize Agent Mailbox",
     `<h1>Connect to Agent Mailbox</h1>
@@ -64,10 +63,9 @@ ${v.error ? `<p class="error">${escapeHtml(v.error)}</p>` : ""}
 <input type="hidden" name="csrf" value="${escapeHtml(v.csrf)}">
 <label for="admin_key">Admin key</label>
 <input id="admin_key" name="admin_key" type="password" autocomplete="current-password" required>
-<label for="agent">Existing agent</label>
-<select id="agent" name="agent"><option value="">(create a new agent)</option>${options}</select>
-<label for="new_agent">…or new agent name</label>
-<input id="new_agent" name="new_agent" type="text" pattern="[a-z0-9][a-z0-9-]{0,31}" placeholder="lowercase letters, digits, hyphen">
+<label for="agent">Agent name</label>
+<input id="agent" name="agent" type="text" required autocomplete="off" placeholder="lowercase letters, digits, hyphen">
+<label class="check"><input name="create" type="checkbox" value="1"> Create this agent if it doesn't exist</label>
 <button type="submit">Authorize</button>
 </form>`
   );
@@ -105,8 +103,9 @@ async function clientName(env: Env, clientId: string): Promise<string> {
 }
 
 /**
- * The consent page for claude.ai connectors. GET renders a form; POST (admin key + agent choice) completes the
- * authorization and redirects back to the client with a code. Only allowlisted redirect URIs are served.
+ * The consent page for claude.ai connectors. GET renders a form (admin key, agent name, "create if missing");
+ * POST checks lockout, CSRF and the admin key before looking at the agent, then completes the authorization
+ * and redirects back to the client with a code. Only allowlisted redirect URIs are served.
  */
 export async function handleAuthorize(request: Request, env: Env, store: Store, config: Config): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") {
@@ -118,7 +117,7 @@ export async function handleAuthorize(request: Request, env: Env, store: Store, 
   const url = new URL(request.url);
   const action = url.pathname + url.search;
   const view = async (csrf: string, error?: string): Promise<string> =>
-    formPage({ action, csrf, clientName: await clientName(env, authReq.clientId), agents: (await store.listAgents()).map((a) => a.name), error });
+    formPage({ action, csrf, clientName: await clientName(env, authReq.clientId), error });
 
   if (request.method === "GET") {
     const csrf = randomToken();
@@ -152,16 +151,18 @@ export async function handleAuthorize(request: Request, env: Env, store: Store, 
   }
 
   let agent: string;
-  const newName = (form.get("new_agent") ?? "").trim();
   try {
-    if (newName !== "") {
-      // The key createAgent returns is deliberately dropped: this agent authenticates through OAuth.
-      agent = (await store.createAgent(newName, "")).name;
-    } else {
-      agent = (form.get("agent") ?? "").trim().toLowerCase();
-      if (agent === "" || !(await store.isActive(agent))) {
-        return respond(400, await view(cookieToken, "Choose an existing active agent or enter a new name."));
+    agent = validName(form.get("agent") ?? "");
+    const state = await store.agentState(agent);
+    if (state === "disabled") {
+      return respond(400, await view(cookieToken, `Agent "${agent}" is disabled.`));
+    }
+    if (state === null) {
+      if (form.get("create") !== "1") {
+        return respond(400, await view(cookieToken, `Agent "${agent}" not found.`));
       }
+      // The key createAgent returns is deliberately dropped: this agent authenticates through OAuth.
+      agent = (await store.createAgent(agent, "")).name;
     }
   } catch (e) {
     if (e instanceof MailboxError && e.code === "invalid_input") {

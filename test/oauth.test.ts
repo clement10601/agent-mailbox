@@ -145,9 +145,12 @@ describe("/authorize", () => {
     expect(html).toMatch(/<form[^>]*method="post"/i);
     expect(html).toContain('name="admin_key"');
     expect(html).toContain('type="password"');
-    expect(html).toContain('name="new_agent"');
-    expect(html).toContain('<option value="alpha"');
-    expect(html).not.toContain('<option value="gone"');
+    expect(html).toMatch(/<input(?=[^>]*name="agent")(?=[^>]*type="text")[^>]*>/);
+    expect(html).toMatch(/<input(?=[^>]*type="checkbox")(?=[^>]*name="create")[^>]*>/);
+    // Nothing about existing agents is shown before the admin key is checked.
+    expect(html).not.toContain("<select");
+    expect(html).not.toContain("alpha");
+    expect(html).not.toContain("gone");
   });
 
   it("GET with a redirect URI outside the allowlist -> 400", async () => {
@@ -230,29 +233,65 @@ describe("/authorize", () => {
     expect(row).toMatchObject({ actor: "admin", target: "alpha" });
   });
 
-  it("a new agent name creates the agent without revealing a key", async () => {
+  it("a missing agent with the create checkbox is created and granted without revealing a key", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "", new_agent: "Fresh-One" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "Fresh-One", create: "1" });
     expect(res.status).toBe(302);
     const text = await res.text();
     expect(text).not.toContain("amk_");
     expect(res.headers.get("Location")).not.toContain("amk_");
     expect(await env.DB.prepare("SELECT 1 FROM agents WHERE name = 'fresh-one'").first()).not.toBeNull();
+    const row = await env.DB.prepare("SELECT target FROM audit_log WHERE event = 'oauth_granted'").first<{ target: string }>();
+    expect(row?.target).toBe("fresh-one");
   });
 
-  it("an unknown or disabled agent -> 400, no grant", async () => {
+  it("a missing agent without the create checkbox -> 400 'not found', nothing created or granted", async () => {
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "nobody" });
+    expect(res.status).toBe(400);
+    expectFrameHeaders(res);
+    const html = await res.text();
+    expect(html).toContain("not found");
+    expect(html).toContain('name="admin_key"');
+    expect(await env.DB.prepare("SELECT 1 FROM agents WHERE name = 'nobody'").first()).toBeNull();
+    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+  });
+
+  it("the create checkbox on an existing active agent just grants it", async () => {
+    const { store } = makeStore();
+    await store.createAgent("alpha", "");
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "alpha", create: "1" });
+    expect(res.status).toBe(302);
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM keys WHERE agent_name = 'alpha'").first<{ n: number }>();
+    expect(n!.n).toBe(1);
+  });
+
+  it("an invalid agent name -> 400", async () => {
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "Bad Name!", create: "1" });
+    expect(res.status).toBe(400);
+    await res.text();
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM agents").first<{ n: number }>()).toEqual({ n: 0 });
+  });
+
+  it("a disabled agent -> 400, no grant, with or without the create checkbox", async () => {
     const { store } = makeStore();
     await store.createAgent("gone", "");
     await store.setDisabled("gone", true);
-    for (const agent of ["nobody", "gone"]) {
+    for (const extra of [{}, { create: "1" }] as Record<string, string>[]) {
       const flow = await startFlow();
       const { cookie, csrf } = await getForm(flow);
-      const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent });
+      const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "gone", ...extra });
       expect(res.status).toBe(400);
       await res.text();
     }
     expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+    expect(await env.DB.prepare("SELECT disabled FROM agents WHERE name = 'gone'").first()).toEqual({ disabled: 1 });
   });
 });
 

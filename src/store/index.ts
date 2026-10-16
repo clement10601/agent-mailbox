@@ -31,6 +31,9 @@ export class Store {
   isActive(name: string) {
     return agents.isActive(this.ctx, name);
   }
+  agentState(name: string) {
+    return agents.agentState(this.ctx, name);
+  }
   touch(name: string) {
     return agents.touch(this.ctx, name);
   }

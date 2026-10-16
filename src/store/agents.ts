@@ -106,6 +106,15 @@ export async function isActive(ctx: StoreContext, name: string): Promise<boolean
   return row !== null;
 }
 
+/** "active", "disabled", or null when no agent has this name. */
+export async function agentState(ctx: StoreContext, name: string): Promise<"active" | "disabled" | null> {
+  const row = await ctx.db
+    .prepare("SELECT disabled FROM agents WHERE name = ?")
+    .bind(normalizeName(name))
+    .first<{ disabled: number }>();
+  return row === null ? null : row.disabled === 0 ? "active" : "disabled";
+}
+
 export async function touch(ctx: StoreContext, name: string): Promise<void> {
   const now = ctx.now();
   await ctx.db

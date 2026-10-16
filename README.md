@@ -124,7 +124,7 @@ claude mcp add --transport http --scope user mailbox https://<host>/mcp \
 
 1. 在 claude.ai 的連接器設定中新增**自訂連接器**，網址填 `https://<host>/mcp`。
 2. claude.ai 會自動註冊用戶端並導向授權頁。
-3. 授權頁要求輸入**管理 key**，並選擇要綁定的 Agent（選現有 Agent，或輸入新名稱建立）。
+3. 授權頁要求輸入**管理 key** 與要綁定的 **Agent 名稱**；若該 Agent 不存在，勾選「Create this agent if it doesn't exist」即會建立。授權頁不會列出現有 Agent。
 4. 同意後完成授權。access token 1 小時、refresh token 30 天；之後這個連接器就以所綁定的 Agent 身分收發信。
 
 ## 建立第一個 Agent
