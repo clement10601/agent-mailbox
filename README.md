@@ -1,6 +1,6 @@
 # Agent Mailbox
 
-**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, running on Cloudflare Workers (D1 + KV + Durable Objects + Cron) and exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them, and are deleted on acknowledgement or expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). MIT licensed.
+**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, running on Cloudflare Workers (D1 + KV + Durable Objects + Cron) and exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). MIT licensed.
 
 ---
 
@@ -55,11 +55,13 @@
 
 - 被封鎖寄件者的信內容仍會存在你的資料庫，直到 `MESSAGE_TTL_DAYS` 到期（`MESSAGE_TTL_DAYS=0` 則不會因時間刪除）。
 - 為了不洩漏封鎖狀態，被封鎖寄件者的 `inbox_full` 判斷是「收件者可見的未讀數 + 該寄件者自己尚未到期的被抑制副本數」，與它未被封鎖時看到的結果一致；收件匣滿時同樣回 `inbox_full`，且不寫入任何副本。
-- 如果你不想保存這類內容，改用 `reject`：直接回 `blocked`，不寫入任何資料，但寄件者會知道自己被封鎖。
+- 如果你不想保存這類內容，改用 `reject`：直接回 `blocked`，信件本身不會被儲存（仍會寫一筆 `send` 稽核紀錄），但寄件者會知道自己被封鎖。
 
 ### `DELETE_ON_ACK=true` 的實際行為
 
-`ack` 時立即清除 `subject`、`body`、`data`，但**保留 metadata**（寄件者、收件者、討論串、時間）直到信件到期，這樣之後的回覆仍能接在同一個討論串。若要連 metadata 也盡早消失，請調低 `MESSAGE_TTL_DAYS`。`MESSAGE_TTL_DAYS=0` 時，這種只剩 metadata 的紀錄在 `ack` 後保留 7 天再刪除。`false` 時 `ack` 只標記已讀，整封信保留到期限。
+`ack` 時立即清除信件列上的 `subject`、`body`、`data`，但**保留 metadata**（寄件者、收件者、討論串、時間）直到信件到期，這樣之後的回覆仍能接在同一個討論串。若要連 metadata 也盡早消失，請調低 `MESSAGE_TTL_DAYS`。`MESSAGE_TTL_DAYS=0` 時，這種只剩 metadata 的紀錄在 `ack` 後保留 7 天再刪除。`false` 時 `ack` 只標記已讀，整封信保留到期限。
+
+注意：`ack` 不會清除稽核紀錄。寄信時寫入的 `send` 稽核紀錄含 `subject`（`AUDIT_LOG_BODIES=true` 時還含內文），會保留到稽核紀錄到期（`MESSAGE_TTL_DAYS`；`0` 則無限期）。
 
 ## 自架步驟
 
@@ -91,7 +93,9 @@ npx wrangler deploy
 
 部署完成後 `https://<你的-worker>.workers.dev/healthz` 應回應正常。`wrangler.toml` 裡的 D1／KV ID 是預留位置，請只在你自己的 fork 填入。
 
-Cron（每小時，`0 * * * *`）會清理到期的信件與稽核紀錄，每次最多各 5,000 列。
+`wrangler.toml` 的 `[[ratelimits]]` `namespace_id`（預設 `1001`、`1002`）在你的 Cloudflare 帳號內必須是唯一的；如果同一帳號的其他 Worker 已用了相同的值，請改成別的整數，否則會共用計數。
+
+Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄與 MCP session 綁定，每次最多各 5,000 列；某一項失敗不會影響其他項目。每個 MCP session 的 Durable Object 儲存不會被回收，會隨 session 數緩慢增加（每個很小）。
 
 ## 設定
 
