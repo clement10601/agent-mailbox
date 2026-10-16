@@ -2,7 +2,8 @@ import type { Config } from "../config";
 import * as agents from "./agents";
 import * as blocks from "./blocks";
 import * as messages from "./messages";
-import { audit as writeAudit, type StoreContext } from "./audit";
+import { audit as writeAudit, auditLog, type StoreContext } from "./audit";
+import { cleanup } from "./cleanup";
 
 export class Store {
   private ctx: StoreContext;
@@ -67,5 +68,11 @@ export class Store {
   }
   audit(event: string, actor: string, target: string | null, subject?: string | null, body?: string | null) {
     return writeAudit(this.ctx, event, actor, target, subject, body);
+  }
+  auditLog(q: { since?: number; agent?: string; limit?: number }) {
+    return auditLog(this.ctx, q);
+  }
+  cleanup(batch?: number) {
+    return cleanup(this.ctx, batch);
   }
 }

@@ -36,3 +36,40 @@ export async function audit(
 ): Promise<void> {
   await auditStatement(ctx, event, actor, target, subject, body).run();
 }
+
+export interface AuditEntry {
+  ts: string;
+  event: string;
+  actor: string | null;
+  target: string | null;
+  subject: string | null;
+  body: string | null;
+}
+
+export async function auditLog(
+  ctx: StoreContext,
+  q: { since?: number; agent?: string; limit?: number }
+): Promise<AuditEntry[]> {
+  const where: string[] = [];
+  const args: (string | number)[] = [];
+  if (q.since !== undefined) {
+    where.push("ts >= ?");
+    args.push(q.since);
+  }
+  if (q.agent !== undefined) {
+    // target may be a comma-joined list of recipients; match whole names only.
+    where.push("(actor = ? OR target = ? OR ',' || target || ',' LIKE ? ESCAPE '\\')");
+    const esc = q.agent.replace(/[\\%_]/g, "\\$&");
+    args.push(q.agent, q.agent, `%,${esc},%`);
+  }
+  const limit = q.limit ?? 100;
+  const sql =
+    "SELECT ts, event, actor, target, subject, body FROM audit_log" +
+    (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
+    " ORDER BY ts DESC, id DESC LIMIT ?";
+  const { results } = await ctx.db
+    .prepare(sql)
+    .bind(...args, limit)
+    .all<{ ts: number; event: string; actor: string | null; target: string | null; subject: string | null; body: string | null }>();
+  return results.map((r) => ({ ...r, ts: new Date(r.ts).toISOString() }));
+}
