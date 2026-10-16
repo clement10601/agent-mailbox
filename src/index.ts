@@ -6,6 +6,7 @@ import {
   AUTH_RETRY_AFTER_SECONDS,
   AdminKeyMissingError,
   activateIdentity,
+  isLockedOut,
   authenticateBearer,
   principalOf,
   recordAuthFailure,
@@ -170,6 +171,16 @@ export default {
     const url = new URL(request.url);
     const header = request.headers.get("Authorization");
     const mcp = isMcpPath(url.pathname);
+    // Lockout comes before any credential (static key or OAuth token) is evaluated. Requests without
+    // credentials evaluate nothing and are never counted, so they are not checked.
+    if (mcp && header !== null) {
+      try {
+        if (await isLockedOut(request, new Store(env.DB, parseConfig(env)))) return rateLimited();
+      } catch (e) {
+        console.error("auth: lockout check failed", e);
+        return json(500, { error: "internal" });
+      }
+    }
     // Bearer pre-routing: static keys never touch the provider. No header at all goes to the provider so the
     // 401 carries the protected-resource-metadata challenge that claude.ai uses to discover OAuth.
     if (mcp && header !== null && !(await isProviderToken(header, env))) {

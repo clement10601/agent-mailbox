@@ -2,7 +2,7 @@ import type { Config } from "../config";
 import * as agents from "./agents";
 import * as blocks from "./blocks";
 import * as messages from "./messages";
-import { audit as writeAudit, auditLog, type StoreContext } from "./audit";
+import { audit as writeAudit, auditLog, countAuthFailures, type StoreContext } from "./audit";
 import { cleanup } from "./cleanup";
 import * as sessions from "./sessions";
 
@@ -69,6 +69,10 @@ export class Store {
   }
   audit(event: string, actor: string, target: string | null, subject?: string | null, body?: string | null) {
     return writeAudit(this.ctx, event, actor, target, subject, body);
+  }
+  /** auth_failed rows for `actor` within the last `windowMs`. */
+  recentAuthFailures(actor: string, windowMs: number) {
+    return countAuthFailures(this.ctx, actor, this.ctx.now() - windowMs);
   }
   auditLog(q: { since?: number; agent?: string; limit?: number }) {
     return auditLog(this.ctx, q);

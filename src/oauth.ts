@@ -2,7 +2,7 @@ import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
 import type { Env } from "./env";
 import type { Config } from "./config";
 import type { Store } from "./store";
-import { AUTH_RETRY_AFTER_SECONDS, recordAuthFailure } from "./auth";
+import { AUTH_RETRY_AFTER_SECONDS, isLockedOut, recordAuthFailure } from "./auth";
 import { randomToken, timingSafeEqual } from "./crypto";
 import { MailboxError } from "./errors";
 import { fromBinding } from "./ratelimit";
@@ -127,6 +127,13 @@ export async function handleAuthorize(request: Request, env: Env, store: Store, 
     });
   }
 
+  const tooMany = () =>
+    errorPage(429, "Too many failed attempts. Wait a minute and try again.", {
+      "Retry-After": String(AUTH_RETRY_AFTER_SECONDS),
+    });
+  // Before the admin key is even looked at: a locked-out IP learns nothing, right key or wrong.
+  if (await isLockedOut(request, store)) return tooMany();
+
   const form = new URLSearchParams(await request.text());
   const cookieToken = readCookie(request, CSRF_COOKIE) ?? "";
   const formToken = form.get("csrf") ?? "";
@@ -140,11 +147,7 @@ export async function handleAuthorize(request: Request, env: Env, store: Store, 
     return errorPage(500, "The server is not configured.");
   }
   if (!(await timingSafeEqual(form.get("admin_key") ?? "", adminKey))) {
-    if (!(await recordAuthFailure(request, fromBinding(env.AUTH_LIMITER), store))) {
-      return errorPage(429, "Too many failed attempts. Wait a minute and try again.", {
-        "Retry-After": String(AUTH_RETRY_AFTER_SECONDS),
-      });
-    }
+    if (!(await recordAuthFailure(request, fromBinding(env.AUTH_LIMITER), store))) return tooMany();
     return respond(401, await view(cookieToken, "Wrong admin key."));
   }
 

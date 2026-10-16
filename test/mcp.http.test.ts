@@ -46,6 +46,37 @@ describe("/mcp over HTTP", () => {
     expect(statuses[10]).toBe(429);
   });
 
+  it("after 10 bad keys a valid key from the same IP is 429 until the window passes", async () => {
+    const { store } = makeStore();
+    const a = await store.createAgent("alpha", "");
+    const ip = freshIp();
+    for (let i = 0; i < 10; i++) {
+      const res = await new Client("amk_wrong", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      expect(res.status).toBe(401);
+      await res.text();
+    }
+    const good = new Client(a.key, ip);
+    const locked = await good.post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    expect(locked.status).toBe(429);
+    await locked.text();
+    // The admin key is locked out too.
+    const admin = await new Client("test-admin-key", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    expect(admin.status).toBe(429);
+    await admin.text();
+    // Age the failures past the 60 s window: the valid key works again.
+    await env.DB.prepare("UPDATE audit_log SET ts = ts - 61000 WHERE event = 'auth_failed'").run();
+    await good.init();
+    expect(await good.toolNames()).toContain("send_message");
+  });
+
+  it("a valid key used many times from one IP is never rate limited", async () => {
+    const { store } = makeStore();
+    const a = await store.createAgent("alpha", "");
+    const c = new Client(a.key);
+    await c.init();
+    for (let i = 0; i < 15; i++) expect(await c.toolNames()).toContain("send_message");
+  });
+
   it("revoked key is rejected on an existing session", async () => {
     const { store } = makeStore();
     const a = await store.createAgent("alpha", "");

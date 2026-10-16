@@ -51,6 +51,19 @@ export function principalOf(identity: Identity): string {
 }
 
 export const AUTH_RETRY_AFTER_SECONDS = 60;
+/** Failed authentications per IP within AUTH_FAILURE_WINDOW_MS after which every attempt from it gets 429. */
+export const AUTH_FAILURE_LIMIT = 10;
+export const AUTH_FAILURE_WINDOW_MS = 60_000;
+
+/**
+ * Lockout check that must run BEFORE any credential is evaluated: an IP with AUTH_FAILURE_LIMIT or more
+ * `auth_failed` rows in the last minute is refused even with a correct key, so guessing cannot continue
+ * behind the 429. Only failures are counted, so legitimate traffic never consumes the budget.
+ * (AUTH_LIMITER is per-location and approximate; the D1 audit rows are the authoritative count.)
+ */
+export async function isLockedOut(request: Request, store: Store): Promise<boolean> {
+  return (await store.recentAuthFailures(clientIp(request), AUTH_FAILURE_WINDOW_MS)) >= AUTH_FAILURE_LIMIT;
+}
 
 /** Outcome per request, so a failure seen by two layers (e.g. provider and /mcp wrapper) is counted once. */
 const failureOutcome = new WeakMap<Request, boolean>();

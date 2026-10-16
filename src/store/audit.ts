@@ -73,3 +73,12 @@ export async function auditLog(
     .all<{ ts: number; event: string; actor: string | null; target: string | null; subject: string | null; body: string | null }>();
   return results.map((r) => ({ ...r, ts: new Date(r.ts).toISOString() }));
 }
+
+/** Number of `auth_failed` rows for `actor` (a client IP) at or after `sinceMs`. */
+export async function countAuthFailures(ctx: StoreContext, actor: string, sinceMs: number): Promise<number> {
+  const row = await ctx.db
+    .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE event = 'auth_failed' AND actor = ? AND ts >= ?")
+    .bind(actor, sinceMs)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}

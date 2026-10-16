@@ -195,6 +195,24 @@ describe("/authorize", () => {
     expect(statuses[10]).toBe(429);
   });
 
+  it("after 10 wrong keys the correct key from the same IP is also 429 and gets no code", async () => {
+    const { store } = makeStore();
+    await store.createAgent("alpha", "");
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    for (let i = 0; i < 10; i++) {
+      const res = await postForm(flow, cookie, { csrf, admin_key: "wrong", agent: "alpha" });
+      expect(res.status).toBe(401);
+      await res.text();
+    }
+    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key", agent: "alpha" });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Location")).toBeNull();
+    await res.text();
+    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+    expect(await env.OAUTH_KV.list({ prefix: "grant:" })).toMatchObject({ keys: [] });
+  });
+
   it("POST with the right admin key -> 302 to the redirect URI with a code, audited as oauth_granted", async () => {
     const { store } = makeStore();
     await store.createAgent("alpha", "");
