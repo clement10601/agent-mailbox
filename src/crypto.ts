@@ -33,3 +33,8 @@ export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
 export function newId(): string {
   return toHex(crypto.getRandomValues(new Uint8Array(8)));
 }
+
+/** Unguessable URL-safe token (32 random bytes), e.g. for CSRF. */
+export function randomToken(): string {
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+}

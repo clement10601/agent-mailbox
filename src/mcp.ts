@@ -7,6 +7,7 @@ import { toToolError, type ToolError } from "./errors";
 import { fromBinding } from "./ratelimit";
 import { Store } from "./store";
 import { agentTools } from "./tools/agent";
+import { grantHelpers } from "./oauth-provider";
 import { adminTools } from "./tools/admin";
 import type { ToolSet } from "./tools/types";
 
@@ -40,7 +41,7 @@ export class MailboxMCP extends McpAgent<Env, unknown, Identity> {
     const store = new Store(this.env.DB, parseConfig(this.env));
     const tools: ToolSet =
       identity.role === "admin"
-        ? adminTools(store, this.env.OAUTH_PROVIDER ?? null)
+        ? adminTools(store, this.env.OAUTH_PROVIDER ?? grantHelpers(this.env))
         : agentTools(store, identity.agent, fromBinding(this.env.SEND_LIMITER));
     for (const [name, def] of Object.entries(tools)) {
       this.server.registerTool(name, { description: def.description, inputSchema: def.schema }, (async (args: unknown) => {

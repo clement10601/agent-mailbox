@@ -9,16 +9,16 @@ export const AUDIT_MAX_LIMIT = 1000;
 
 const agentName = z.string().describe("Agent name (case-insensitive).");
 
-async function countGrants(oauth: OAuthHelpers | null, agent: string): Promise<number> {
-  if (!oauth) return 0;
-  let n = 0;
+async function grantIds(oauth: OAuthHelpers | null, agent: string): Promise<string[]> {
+  if (!oauth) return [];
+  const ids: string[] = [];
   let cursor: string | undefined;
   do {
     const page = await oauth.listUserGrants(agent, cursor ? { cursor } : undefined);
-    n += page.items.length;
+    for (const g of page.items) ids.push(g.id);
     cursor = page.cursor;
   } while (cursor);
-  return n;
+  return ids.sort();
 }
 
 function parseSince(since: string | undefined): number | undefined {
@@ -77,12 +77,16 @@ export function adminTools(store: Store, oauth: OAuthHelpers | null): ToolSet {
       },
     },
     admin_list_agents: {
-      description: "All agents with unread count, last_seen_at, active key count and OAuth grant count.",
+      description:
+        "All agents with unread count, last_seen_at, active key count, OAuth grant count and grant ids (for admin_revoke_oauth).",
       schema: {},
       handler: async () => {
         const agents = await store.adminListAgents();
         const out = [];
-        for (const a of agents) out.push({ ...a, oauth_grants: await countGrants(oauth, a.name) });
+        for (const a of agents) {
+          const ids = await grantIds(oauth, a.name);
+          out.push({ ...a, oauth_grants: ids.length, oauth_grant_ids: ids });
+        }
         return { agents: out };
       },
     },
@@ -114,7 +118,7 @@ export function adminTools(store: Store, oauth: OAuthHelpers | null): ToolSet {
       },
     },
     admin_revoke_oauth: {
-      description: "Revoke one OAuth grant of an agent (grant ids are listed by the OAuth provider).",
+      description: "Revoke one OAuth grant of an agent; its access and refresh tokens stop working. Grant ids come from admin_list_agents.",
       schema: {
         agent: agentName,
         grant_id: z.string().describe("OAuth grant id."),
@@ -123,7 +127,12 @@ export function adminTools(store: Store, oauth: OAuthHelpers | null): ToolSet {
         if (!oauth) {
           throw new MailboxError("internal", "OAuth is not available.", "Retry later; if it persists, contact the operator.");
         }
-        await oauth.revokeGrant(args.grant_id, args.agent.trim().toLowerCase());
+        const agent = args.agent.trim().toLowerCase();
+        if (!(await grantIds(oauth, agent)).includes(args.grant_id)) {
+          throw new MailboxError("not_found", `Agent "${agent}" has no OAuth grant "${args.grant_id}".`, "List grant ids with admin_list_agents.");
+        }
+        await oauth.revokeGrant(args.grant_id, agent);
+        await store.audit("oauth_revoked", "admin", agent, args.grant_id);
         return { ok: true };
       },
     },

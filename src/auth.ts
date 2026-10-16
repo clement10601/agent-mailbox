@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import type { Store } from "./store";
 import { timingSafeEqual } from "./crypto";
+import type { RateLimiter } from "./ratelimit";
 
 export type Identity = { role: "admin" } | { role: "agent"; agent: string };
 
@@ -47,4 +48,27 @@ export async function activateIdentity(identity: Identity, store: Store): Promis
 /** Stable string form of an identity, used to bind MCP sessions to the identity that created them. */
 export function principalOf(identity: Identity): string {
   return identity.role === "admin" ? "admin" : `agent:${identity.agent}`;
+}
+
+export const AUTH_RETRY_AFTER_SECONDS = 60;
+
+/** Outcome per request, so a failure seen by two layers (e.g. provider and /mcp wrapper) is counted once. */
+const failureOutcome = new WeakMap<Request, boolean>();
+
+export function clientIp(request: Request): string {
+  return request.headers.get("CF-Connecting-IP") ?? "unknown";
+}
+
+/**
+ * Counts a failed authentication against AUTH_LIMITER (per client IP) and writes an `auth_failed` audit row.
+ * Returns false when the IP is over its limit: the caller must answer 429 (nothing is audited then).
+ */
+export async function recordAuthFailure(request: Request, limiter: RateLimiter, store: Store): Promise<boolean> {
+  const prior = failureOutcome.get(request);
+  if (prior !== undefined) return prior;
+  const ip = clientIp(request);
+  const allowed = await limiter.limit(ip);
+  failureOutcome.set(request, allowed);
+  if (allowed) await store.audit("auth_failed", ip, null);
+  return allowed;
 }
