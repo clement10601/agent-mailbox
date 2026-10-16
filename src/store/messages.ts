@@ -101,7 +101,7 @@ export async function send(
   if (input.reply_to !== undefined && input.reply_to !== null && input.reply_to !== "") {
     const ref = await ctx.db
       .prepare(
-        `SELECT thread_id FROM messages WHERE id = ? AND (from_agent = ? OR to_agent = ?)
+        `SELECT thread_id FROM messages WHERE id = ? AND (from_agent = ? OR (to_agent = ? AND suppressed = 0))
          AND (expires_at IS NULL OR expires_at > ?)`
       )
       .bind(String(input.reply_to), from, from, now)
@@ -140,22 +140,25 @@ export async function send(
       failed.push({ agent: r, code: "unknown_recipient" });
       continue;
     }
+    let suppressed = 0;
     const blocked = await ctx.db
       .prepare("SELECT 1 FROM blocks WHERE agent_name = ? AND blocked_sender = ?")
       .bind(r, from)
       .first();
     if (blocked) {
-      if (ctx.config.blockedSenderFeedback === "reject") failed.push({ agent: r, code: "blocked" });
-      else delivered.push(r);
-      continue;
+      if (ctx.config.blockedSenderFeedback === "reject") {
+        failed.push({ agent: r, code: "blocked" });
+        continue;
+      }
+      suppressed = 1; // silent: real row, invisible to the recipient
     }
-    const unread = await ctx.db
+    const unread = suppressed ? null : await ctx.db
       .prepare(
-        "SELECT COUNT(*) AS n FROM messages WHERE to_agent = ? AND acked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)"
+        "SELECT COUNT(*) AS n FROM messages WHERE to_agent = ? AND acked_at IS NULL AND suppressed = 0 AND (expires_at IS NULL OR expires_at > ?)"
       )
       .bind(r, now)
       .first<{ n: number }>();
-    if ((unread?.n ?? 0) >= ctx.config.maxUnread) {
+    if (!suppressed && (unread?.n ?? 0) >= ctx.config.maxUnread) {
       failed.push({ agent: r, code: "inbox_full" });
       continue;
     }
@@ -164,10 +167,10 @@ export async function send(
     stmts.push(
       ctx.db
         .prepare(
-          `INSERT INTO messages (id, thread_id, reply_to, from_agent, to_agent, subject, body, data, created_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, thread_id, reply_to, from_agent, to_agent, subject, body, data, created_at, expires_at, suppressed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .bind(id, threadId, replyTo, from, r, input.subject, input.body, dataJson, now, expiresAt)
+        .bind(id, threadId, replyTo, from, r, input.subject, input.body, dataJson, now, expiresAt, suppressed)
     );
     delivered.push(r);
   }
@@ -185,7 +188,7 @@ export async function inbox(ctx: StoreContext, agent: string, limit?: number): P
   lim = Math.min(Math.max(lim, 1), max);
   const { results } = await ctx.db
     .prepare(
-      `SELECT ${COLS} FROM messages WHERE to_agent = ? AND acked_at IS NULL
+      `SELECT ${COLS} FROM messages WHERE to_agent = ? AND acked_at IS NULL AND suppressed = 0
        AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, rowid LIMIT ?`
     )
     .bind(normalizeName(agent), ctx.now(), lim)
@@ -211,7 +214,7 @@ export async function ack(
   const stmts: D1PreparedStatement[] = [];
   for (const id of [...new Set(ids)]) {
     const row = await ctx.db
-      .prepare("SELECT acked_at FROM messages WHERE id = ? AND to_agent = ? AND (expires_at IS NULL OR expires_at > ?)")
+      .prepare("SELECT acked_at FROM messages WHERE id = ? AND to_agent = ? AND suppressed = 0 AND (expires_at IS NULL OR expires_at > ?)")
       .bind(id, me, now)
       .first<{ acked_at: number | null }>();
     if (!row) {
@@ -234,7 +237,7 @@ export async function thread(ctx: StoreContext, agent: string, threadId: string)
   const me = normalizeName(agent);
   const { results } = await ctx.db
     .prepare(
-      `SELECT ${COLS} FROM messages WHERE thread_id = ? AND (from_agent = ? OR to_agent = ?)
+      `SELECT ${COLS} FROM messages WHERE thread_id = ? AND (from_agent = ? OR (to_agent = ? AND suppressed = 0))
        AND body IS NOT NULL AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, rowid`
     )
     .bind(String(threadId), me, me, ctx.now())

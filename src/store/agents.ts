@@ -128,7 +128,7 @@ export async function adminListAgents(ctx: StoreContext): Promise<
   const { results } = await ctx.db
     .prepare(
       `SELECT a.name, a.description, a.disabled, a.last_seen_at,
-        (SELECT COUNT(*) FROM messages m WHERE m.to_agent = a.name AND m.acked_at IS NULL
+        (SELECT COUNT(*) FROM messages m WHERE m.to_agent = a.name AND m.acked_at IS NULL AND m.suppressed = 0
            AND (m.expires_at IS NULL OR m.expires_at > ?)) AS unread,
         (SELECT COUNT(*) FROM keys k WHERE k.agent_name = a.name AND k.revoked_at IS NULL) AS active_keys
        FROM agents a ORDER BY a.name`
@@ -153,7 +153,7 @@ export async function getProfile(
   const row = await ctx.db
     .prepare(
       `SELECT a.name, a.description,
-        (SELECT COUNT(*) FROM messages m WHERE m.to_agent = a.name AND m.acked_at IS NULL
+        (SELECT COUNT(*) FROM messages m WHERE m.to_agent = a.name AND m.acked_at IS NULL AND m.suppressed = 0
            AND (m.expires_at IS NULL OR m.expires_at > ?)) AS unread
        FROM agents a WHERE a.name = ?`
     )

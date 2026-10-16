@@ -229,3 +229,58 @@ describe("blocks", () => {
     await expectCode(store.block("b", "bad name!"), "invalid_input");
   });
 });
+
+describe("silent block does not leak", () => {
+  async function scenario(blocked: boolean) {
+    const { store } = await setup();
+    if (blocked) await store.block("b", "a");
+    const first = await store.send("a", msg("b"));
+    const t = await store.thread("a", first.thread_id);
+    const reply = await store.send("a", msg("b", { reply_to: first.id })).then(
+      (r) => ({ ok: true, same: r.thread_id === first.thread_id }),
+      (e) => ({ ok: false, code: e.code })
+    );
+    return { delivered: first.delivered, n: t.length, to: t.map((m) => m.to), reply };
+  }
+
+  it("sender's thread() and reply_to behave identically", async () => {
+    const plain = await scenario(false);
+    await resetDb();
+    const blocked = await scenario(true);
+    expect(blocked).toEqual(plain);
+    expect(blocked.n).toBe(1);
+    expect(blocked.reply).toEqual({ ok: true, same: true });
+  });
+
+  it("recipient never sees a suppressed message", async () => {
+    const { store } = await setup();
+    await store.block("b", "a");
+    const r = await store.send("a", msg("b"));
+    expect(await store.inbox("b")).toEqual([]);
+    expect((await store.getProfile("b")).unread).toBe(0);
+    expect((await store.adminListAgents()).find((x) => x.name === "b")!.unread).toBe(0);
+    expect(await store.thread("b", r.thread_id)).toEqual([]);
+    expect(await store.ack("b", [r.id])).toEqual({ acked: [], failed: [{ id: r.id, code: "not_found" }] });
+    await expectCode(store.send("b", msg("a", { reply_to: r.id })), "invalid_reply_to");
+  });
+
+  it("broadcast with a silent blocker", async () => {
+    const { store } = await setup();
+    await store.block("c", "a");
+    const r = await store.send("a", msg("all"));
+    expect(r.delivered).toEqual(["b", "c"]);
+    const t = await store.thread("a", r.thread_id);
+    expect(t.map((m) => m.to).sort()).toEqual(["b", "c"]);
+    expect(await store.inbox("c")).toEqual([]);
+    expect(await store.thread("c", r.thread_id)).toEqual([]);
+    expect(await store.inbox("b")).toHaveLength(1);
+  });
+
+  it("silent block + full inbox still reports delivered", async () => {
+    const { store } = await setup();
+    for (let i = 0; i < 10; i++) await store.send("c", msg("b"));
+    await store.block("b", "a");
+    expect((await store.send("a", msg("b"))).delivered).toEqual(["b"]);
+    expect(await store.inbox("b")).toHaveLength(10);
+  });
+});
