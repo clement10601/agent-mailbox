@@ -1,6 +1,9 @@
 import { env } from "cloudflare:workers";
-import { beforeEach, describe, expect, it } from "vitest";
-import { makeStore, resetDb } from "./helpers";
+import { createExecutionContext, createScheduledController, waitOnExecutionContext } from "cloudflare:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import worker from "../src/index";
+import { Store } from "../src/store";
+import { defaultConfig, makeStore, resetDb } from "./helpers";
 
 beforeEach(resetDb);
 
@@ -100,6 +103,53 @@ describe("cleanup", () => {
     const r = await store.cleanup();
     expect(r.audit).toBeGreaterThanOrEqual(1);
     expect(await count("audit_log")).toBe(0);
+  });
+});
+
+/** env.DB, except that statements whose SQL contains `failOn` throw when prepared. */
+function failingDb(failOn: string): D1Database {
+  return new Proxy(env.DB, {
+    get(target, prop) {
+      if (prop === "prepare") {
+        return (sql: string) => {
+          if (sql.includes(failOn)) throw new Error("D1 down");
+          return target.prepare(sql);
+        };
+      }
+      const v = Reflect.get(target, prop);
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+}
+
+describe("cleanup failures", () => {
+  it("a failing step does not skip the others and is reported", async () => {
+    const { store, clock } = await setup();
+    await store.send("a", msg("b"));
+    await store.bindSession("s1", "agent:a");
+    clock.advance(31 * DAY);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const broken = new Store(failingDb("DELETE FROM messages"), defaultConfig, () => clock.now);
+    const r = await broken.cleanup();
+    errors.mockRestore();
+    expect(r.messages).toBe(0);
+    expect(r.audit).toBeGreaterThanOrEqual(1);
+    expect(r.sessions).toBe(1);
+    expect(r.failed).toEqual(["messages"]);
+    expect(await count("messages")).toBe(1);
+    expect(await count("audit_log")).toBe(0);
+  });
+
+  it("the scheduled handler logs messages, audit and sessions counts", async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m: unknown) => {
+      logs.push(String(m));
+    });
+    const ctx = createExecutionContext();
+    await worker.scheduled(createScheduledController({ scheduledTime: Date.now(), cron: "0 * * * *" }), env, ctx);
+    await waitOnExecutionContext(ctx);
+    spy.mockRestore();
+    expect(logs.some((l) => /cleanup: .*messages.*audit.*sessions/.test(l))).toBe(true);
   });
 });
 

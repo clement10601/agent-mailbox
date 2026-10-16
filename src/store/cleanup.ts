@@ -8,16 +8,27 @@ import type { StoreContext } from "./audit";
 export async function cleanup(
   ctx: StoreContext,
   batch = 5000
-): Promise<{ messages: number; audit: number; sessions: number }> {
+): Promise<{ messages: number; audit: number; sessions: number; failed: string[] }> {
   const now = ctx.now();
+  const failed: string[] = [];
+  // Each table is cleaned independently: a failure is logged and reported but does not skip the others.
   const del = async (table: string): Promise<number> => {
-    const r = await ctx.db
-      .prepare(
-        `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT ?)`
-      )
-      .bind(now, batch)
-      .run();
-    return r.meta.changes ?? 0;
+    try {
+      const r = await ctx.db
+        .prepare(
+          `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT ?)`
+        )
+        .bind(now, batch)
+        .run();
+      return r.meta.changes ?? 0;
+    } catch (e) {
+      console.error(`cleanup: ${table} failed`, e);
+      failed.push(table);
+      return 0;
+    }
   };
-  return { messages: await del("messages"), audit: await del("audit_log"), sessions: await del("mcp_sessions") };
+  const messages = await del("messages");
+  const audit = await del("audit_log");
+  const sessions = await del("mcp_sessions");
+  return { messages, audit, sessions, failed };
 }

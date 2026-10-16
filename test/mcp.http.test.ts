@@ -1,6 +1,7 @@
-import { SELF } from "cloudflare:test";
+import { SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
+import { handleMcp } from "../src/index";
 import { makeStore, resetDb } from "./helpers";
 import { Client, freshIp } from "./mcp-client";
 
@@ -243,6 +244,34 @@ describe("session binding", () => {
     await c.init();
     const row = await env.DB.prepare("SELECT principal FROM mcp_sessions WHERE id = ?").bind(c.sessionId).first<{ principal: string }>();
     expect(row?.principal).toBe("agent:alpha");
+  });
+});
+
+describe("internal errors", () => {
+  it("a D1 failure while recording an auth failure answers the JSON 500", async () => {
+    const failingDb = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            if (sql.includes("INSERT INTO audit_log")) throw new Error("D1 down");
+            return target.prepare(sql);
+          };
+        }
+        const v = Reflect.get(target, prop);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    const req = new Request("https://x/mcp", {
+      method: "POST",
+      headers: { Authorization: "Bearer amk_wrong", "CF-Connecting-IP": freshIp(), "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const ctx = createExecutionContext();
+    const res = await handleMcp(req, { ...env, DB: failingDb }, ctx).catch((e) => e);
+    await waitOnExecutionContext(ctx);
+    expect(res).toBeInstanceOf(Response);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal" });
   });
 });
 

@@ -206,6 +206,9 @@ export default {
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     const store = new Store(env.DB, parseConfig(env));
     const r = await store.cleanup();
-    console.log(`cleanup: deleted ${r.messages} messages, ${r.audit} audit rows`);
+    console.log(
+      `cleanup: deleted ${r.messages} messages, ${r.audit} audit rows, ${r.sessions} sessions` +
+        (r.failed.length ? `; failed: ${r.failed.join(", ")}` : "")
+    );
   },
 } satisfies ExportedHandler<Env>;
