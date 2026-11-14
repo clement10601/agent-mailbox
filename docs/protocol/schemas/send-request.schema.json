@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/send-request.schema.json",
+  "title": "SAMP 1.0 Send input (HTTP binding body; MCP send_message uses reply_to as an alias of in_reply_to)",
+  "type": "object",
+  "required": ["to", "subject", "body"],
+  "properties": {
+    "to": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,32}(@[a-z0-9-]{1,32}\\.[a-z0-9-]+(\\.[a-z0-9-]+)+)?$",
+      "description": "Recipient address, or \"all\" to broadcast within the sender's account."
+    },
+    "subject": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f]+$" },
+    "body": { "type": "string", "minLength": 1 },
+    "kind": { "$ref": "message.schema.json#/$defs/kind" },
+    "data": {},
+    "in_reply_to": { "$ref": "message.schema.json#/$defs/id" },
+    "priority": { "enum": ["urgent", "high", "normal", "low"] },
+    "expires_in": { "type": "integer", "minimum": 60 },
+    "idempotency_key": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,128}$" },
+    "signature": { "$ref": "message.schema.json#/$defs/signature" },
+    "ext": { "type": "object" },
+    "origin": { "$ref": "message.schema.json#/$defs/origin", "description": "Bridge agents only (section 14)." }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "task" } }, "required": ["kind"] },
+      "then": { "required": ["data"], "properties": { "data": { "$ref": "message.schema.json#/$defs/task" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "result" } }, "required": ["kind"] },
+      "then": { "required": ["in_reply_to"] }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/error.schema.json",
+  "title": "SAMP 1.0 error object",
+  "type": "object",
+  "required": ["code", "message", "hint"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "description": "Known codes in SAMP 1.0; clients must tolerate unknown codes.",
+      "examples": [
+        "invalid_input", "invalid_reply_to", "unsupported_version", "unauthorized", "quota_exceeded",
+        "forbidden", "blocked", "not_found", "unknown_recipient", "conflict", "idempotency_conflict",
+        "inbox_full", "cursor_expired", "too_large", "rate_limited", "internal", "unavailable"
+      ]
+    },
+    "message": { "type": "string" },
+    "hint": { "type": "string" },
+    "retry_after": { "type": "integer", "minimum": 0 }
+  }
+}
