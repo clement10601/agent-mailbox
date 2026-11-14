@@ -1,6 +1,6 @@
 # Agent Mailbox
 
-**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, running on Cloudflare Workers (D1 + KV + Durable Objects + Cron) and exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). MIT licensed.
+**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, running on Cloudflare Workers (D1 + KV + Durable Objects + Cron) and exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). Licensed under GPL-3.0-only.
 
 ---
 
@@ -177,4 +177,6 @@ npx vitest run
 
 ## 授權
 
-[MIT](LICENSE) © 2026 clement10601
+Copyright © 2026 clement10601
+
+本專案以 [GNU General Public License v3.0](LICENSE)（GPL-3.0-only）授權。

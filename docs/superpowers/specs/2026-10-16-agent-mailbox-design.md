@@ -3,7 +3,7 @@
 - 日期：2026-10-16
 - 狀態：待審閱
 - 部署目標：Cloudflare Workers（D1 + KV + Cron Trigger）
-- 授權：MIT（開源，可自架）
+- 授權：GPL-3.0-only（開源，可自架）
 
 ## 1. 目的
 
