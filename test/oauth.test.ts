@@ -467,3 +467,115 @@ describe("token endpoint", () => {
     await res.text();
   });
 });
+
+describe("binding codes", () => {
+  async function mint(args: Record<string, unknown>): Promise<{ code: string; agent: string; create: boolean; expires_at: string }> {
+    return (await admin(w)).ok("admin_create_binding_code", args);
+  }
+
+  it("the form offers a binding code field", async () => {
+    const { html } = await getForm(await startFlow());
+    expect(html).toMatch(/<input(?=[^>]*name="binding_code")(?=[^>]*type="password")[^>]*>/);
+  });
+
+  it("a code binds the connector to its agent, works once, and the token acts as that agent", async () => {
+    await createAgent(w, "alpha");
+    const minted = await mint({ agent: "Alpha" });
+    expect(minted.code).toMatch(/^amb_/);
+    expect(minted.agent).toBe("alpha");
+    expect(Date.parse(minted.expires_at) - Date.now()).toBeGreaterThan(9 * 60_000);
+    const stored = await w.db.prepare("SELECT code_hash FROM binding_codes").first();
+    expect(stored?.code_hash).not.toBe(minted.code);
+
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    // The admin fields are ignored when a code is given: the code decides the agent.
+    const res = await postForm(flow, cookie, { csrf, binding_code: ` ${minted.code} `, agent: "someone-else" });
+    expect(res.status).toBe(302);
+    const code = new URL(res.headers.get("Location")!).searchParams.get("code")!;
+    const tok = (await exchange(flow, code)).access_token;
+    const c = await new Client(w, tok).init();
+    expect((await c.ok("whoami")).name).toBe("alpha");
+    const row = await w.db.prepare("SELECT actor, target FROM audit_log WHERE event = 'oauth_granted'").first();
+    expect(row).toMatchObject({ actor: "binding_code", target: "alpha" });
+    expect(await w.db.prepare("SELECT 1 FROM binding_codes").first()).toBeNull();
+
+    const again = await startFlow();
+    const f2 = await getForm(again);
+    const reuse = await postForm(again, f2.cookie, { csrf: f2.csrf, binding_code: minted.code });
+    expect(reuse.status).toBe(401);
+    expect(await reuse.text()).toContain("already used");
+    const failed = await w.db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE event = 'auth_failed'").first();
+    expect(failed?.n).toBe(1);
+  });
+
+  it("create: true creates the agent only when the code is used", async () => {
+    const minted = await mint({ agent: "new-bot", create: true });
+    expect(await w.db.prepare("SELECT 1 FROM agents WHERE name = 'new-bot'").first()).toBeNull();
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf, binding_code: minted.code });
+    expect(res.status).toBe(302);
+    expect(await res.text()).not.toContain("amk_");
+    expect(await w.db.prepare("SELECT 1 FROM agents WHERE name = 'new-bot'").first()).not.toBeNull();
+  });
+
+  it("minting refuses a missing agent without create, a disabled agent, and an out-of-range ttl", async () => {
+    const a = await admin(w);
+    expect((await a.call("admin_create_binding_code", { agent: "nobody" })).value.code).toBe("not_found");
+    await createAgent(w, "gone");
+    await disable("gone");
+    expect((await a.call("admin_create_binding_code", { agent: "gone", create: true })).isError).toBe(true);
+    await createAgent(w, "alpha");
+    expect((await a.call("admin_create_binding_code", { agent: "alpha", ttl_minutes: 0 })).isError).toBe(true);
+    expect((await a.call("admin_create_binding_code", { agent: "alpha", ttl_minutes: 61 })).isError).toBe(true);
+    expect(await w.db.prepare("SELECT 1 FROM binding_codes").first()).toBeNull();
+  });
+
+  it("an agent cannot mint codes", async () => {
+    const { key } = await createAgent(w, "alpha");
+    const c = await new Client(w, key).init();
+    expect((await c.call("admin_create_binding_code", { agent: "alpha" })).isError).toBe(true);
+  });
+
+  it("an expired code is refused and consumed", async () => {
+    await createAgent(w, "alpha");
+    const minted = await mint({ agent: "alpha", ttl_minutes: 1 });
+    await w.db.prepare("UPDATE binding_codes SET expires_at = 1").run();
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf, binding_code: minted.code });
+    expect(res.status).toBe(401);
+    await res.text();
+    expect(await w.db.prepare("SELECT 1 FROM binding_codes").first()).toBeNull();
+  });
+
+  it("a code whose agent was disabled after minting -> 400, no grant", async () => {
+    await createAgent(w, "alpha");
+    const minted = await mint({ agent: "alpha" });
+    await disable("alpha");
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf, binding_code: minted.code });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("disabled");
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+  });
+
+  it("an empty form -> 400 without counting a failure", async () => {
+    const flow = await startFlow();
+    const { cookie, csrf } = await getForm(flow);
+    const res = await postForm(flow, cookie, { csrf });
+    expect(res.status).toBe(400);
+    await res.text();
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
+  });
+
+  it("cron deletes expired codes", async () => {
+    await createAgent(w, "alpha");
+    await mint({ agent: "alpha" });
+    await w.db.prepare("UPDATE binding_codes SET expires_at = 1").run();
+    await w.scheduled();
+    expect(await w.db.prepare("SELECT 1 FROM binding_codes").first()).toBeNull();
+  });
+});

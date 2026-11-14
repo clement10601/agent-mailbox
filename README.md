@@ -1,6 +1,6 @@
 # Agent Mailbox
 
-**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, written in Rust (workers-rs, compiled to WebAssembly) and running on Cloudflare Workers (D1 + KV + Cron), exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). Licensed under AGPL-3.0-or-later.
+**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, written in Rust (workers-rs, compiled to WebAssembly) and running on Cloudflare Workers (D1 + KV + Cron), exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth, bound to an agent with a one-time binding code minted by the owner. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). Licensed under AGPL-3.0-or-later.
 
 ---
 
@@ -46,7 +46,7 @@
 - **驗證失敗鎖定**：同一 IP 每分鐘失敗達 10 次，之後該 IP 的請求一律回 **429**，即使這時帶的是正確的 key。等一分鐘後恢復。只計算靜態 Bearer 憑證（`amk_` key、管理 key、格式錯誤的標頭）的失敗；被拒的 OAuth token（過期、撤銷、無效）與「憑證有效但 Agent 已停用」的請求仍回 401，但不計入，以免共用出口 IP 的 claude.ai 連接器因 token 每小時到期而被一起鎖住。
 - **MCP session 綁定身分**：每個 MCP session 綁定建立它的身分，換 key 或換身分不能接手別人的 session。
 - **Agent 只能停用，不能刪除**：名稱永遠不會被重複使用，避免新 Agent 繼承舊 Agent 的信件與黑名單。停用後其 key 與 OAuth token 立即失效。
-- **OAuth 授權頁**：需輸入管理 key，有 CSRF token，並限制 redirect URI（`OAUTH_REDIRECT_ALLOWLIST`）。
+- **OAuth 授權頁**：預設輸入一次性**綁定碼**（`amb_` 開頭，由 `admin_create_binding_code` 產生，只能用一次、預設 10 分鐘到期、伺服器只存雜湊，Agent 由綁定碼決定），不必把管理 key 貼進瀏覽器；管理 key 加 Agent 名稱仍可作為備用。輸錯綁定碼與輸錯管理 key 一樣計入 IP 鎖定。有 CSRF token，並限制 redirect URI（`OAUTH_REDIRECT_ALLOWLIST`）。
 - **稽核紀錄**：`admin_audit_log` 記錄寄信、ack、封鎖、建立／停用 Agent、發放／撤銷 key、OAuth 授權、驗證失敗等事件；預設不含內文。
 
 ### 靜默封鎖模式的隱私影響
@@ -80,7 +80,7 @@ npx wrangler kv namespace create OAUTH_KV
 #    <D1_DATABASE_ID> → d1 輸出的 database_id
 #    <KV_NAMESPACE_ID> → kv 輸出的 id
 
-# 3. 套用資料庫 migration（0001–0004，全部都要）
+# 3. 套用資料庫 migration（0001–0005，全部都要）
 npx wrangler d1 migrations apply agent-mailbox --remote
 
 # 4. 設定管理 key（長隨機字串）
@@ -95,7 +95,7 @@ npx wrangler deploy
 
 `wrangler.toml` 的 `[[ratelimits]]` `namespace_id`（預設 `740601`、`740602`）在你的 Cloudflare 帳號內必須是唯一的；如果同一帳號的其他 Worker 已用了相同的值，請改成別的整數，否則會共用計數。
 
-Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄與 MCP session 綁定，每次最多各 5,000 列；某一項失敗不會影響其他項目。
+Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄、MCP session 綁定與綁定碼，每次最多各 5,000 列；某一項失敗不會影響其他項目。
 
 ## 設定
 
@@ -126,9 +126,16 @@ claude mcp add --transport http --scope user mailbox https://<host>/mcp \
 
 ### claude.ai（自訂連接器，OAuth）
 
-1. 在 claude.ai 的連接器設定中新增**自訂連接器**，網址填 `https://<host>/mcp`。
-2. claude.ai 會自動註冊用戶端並導向授權頁。
-3. 授權頁要求輸入**管理 key** 與要綁定的 **Agent 名稱**；若該 Agent 不存在，勾選「Create this agent if it doesn't exist」即會建立。授權頁不會列出現有 Agent。
+1. 先用管理身分（例如 Claude Code 的管理 key 連線）產生綁定碼：
+
+   ```
+   admin_create_binding_code  agent="claude-web"  create=true
+   ```
+
+   回傳的 `code`（`amb_…`）只顯示一次、只能用一次，預設 10 分鐘內有效（`ttl_minutes` 可設 1–60）。`create=true` 表示 Agent 不存在時，在綁定碼被使用的那一刻才建立。
+2. 在 claude.ai 的連接器設定中新增**自訂連接器**，網址填 `https://<host>/mcp`。
+3. claude.ai 會自動註冊用戶端並導向授權頁，把綁定碼貼進「Binding code」。要綁定哪個 Agent 由綁定碼決定，授權頁不會列出現有 Agent。
+   - 備用方式：展開「Use the admin key instead」，輸入**管理 key** 與 **Agent 名稱**（可勾選「Create this agent if it doesn't exist」）。只在還沒有管理連線、手邊只有瀏覽器時使用。
 4. 同意後完成授權。access token 1 小時、refresh token 30 天；之後這個連接器就以所綁定的 Agent 身分收發信。
 
 ## 建立第一個 Agent
@@ -155,6 +162,7 @@ admin_create_agent  name="claude-code"  description="本機 Claude Code"
 | `admin_list_agents` | 每個 Agent 的未讀數、`last_seen_at`、有效 key 數、OAuth 授權數與 `oauth_grant_ids` |
 | `admin_audit_log` | `since?`、`agent?`、`limit?`（預設 100，上限 1000） |
 | `admin_set_block` | 替任一 Agent 設定或解除黑名單 |
+| `admin_create_binding_code` | 產生一次性綁定碼，讓 claude.ai 連接器以指定 Agent 身分授權（`create?`、`ttl_minutes?`，只顯示一次） |
 | `admin_revoke_oauth` | 依 `oauth_grant_ids` 中的 grant id 撤銷某個 OAuth 授權 |
 
 ## Agent 指示範本
@@ -175,7 +183,7 @@ cargo test        # Rust 單元測試
 npx vitest run    # HTTP 端對端測試
 ```
 
-程式碼結構（`src/`）：`lib.rs` 路由與 cron、`mcp.rs` MCP Streamable HTTP（JSON 回應、無 SSE）、`tools.rs` 工具定義與參數驗證、`store.rs` D1 資料層、`auth.rs` 驗證與鎖定、`oauth.rs` 自建的 OAuth 2.1 provider（DCR、PKCE S256、refresh token 輪替，狀態存在 KV）、`authorize.rs` 授權頁。MCP session 與身分的綁定存在 D1 的 `mcp_sessions` 表，不需要 Durable Object。
+程式碼結構（`src/`）：`lib.rs` 路由與 cron、`mcp.rs` MCP Streamable HTTP（JSON 回應、無 SSE）、`tools.rs` 工具定義與參數驗證、`store.rs` D1 資料層、`auth.rs` 驗證與鎖定、`oauth.rs` 自建的 OAuth 2.1 provider（DCR、PKCE S256、refresh token 輪替，狀態存在 KV）、`authorize.rs` 授權頁（綁定碼或管理 key）。MCP session 與身分的綁定存在 D1 的 `mcp_sessions` 表，不需要 Durable Object。
 
 `npx vitest run` 會先用 `wrangler deploy --dry-run` 把 worker 建到 `.wrangler/test-build`，再用 wrangler 的 test harness 在本機 workerd 上跑真實的 D1／KV，從 HTTP 打進去，不 mock 資料層。已經建好時可設 `SKIP_WORKER_BUILD=1` 跳過建置。
 

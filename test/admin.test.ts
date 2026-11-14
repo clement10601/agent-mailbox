@@ -33,6 +33,7 @@ describe("admin tools", () => {
     expect((await adm.toolNames()).sort()).toEqual(
       [
         "admin_create_agent",
+        "admin_create_binding_code",
         "admin_issue_key",
         "admin_revoke_key",
         "admin_disable_agent",

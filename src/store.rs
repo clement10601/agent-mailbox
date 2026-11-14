@@ -6,7 +6,7 @@ use wasm_bindgen::JsValue;
 use worker::{D1Database, D1PreparedStatement};
 
 use crate::config::{BlockedFeedback, Config};
-use crate::crypto::{generate_key, new_id, sha256_hex};
+use crate::crypto::{generate_binding_code, generate_key, new_id, sha256_hex};
 use crate::errors::{Error, ErrorCode, Result};
 
 const DAY_MS: i64 = 86_400_000;
@@ -195,6 +195,7 @@ pub struct CleanupResult {
     pub messages: usize,
     pub audit: usize,
     pub sessions: usize,
+    pub binding_codes: usize,
     pub failed: Vec<String>,
 }
 
@@ -765,6 +766,58 @@ impl Store {
         Ok(())
     }
 
+    // ---- binding codes ----
+
+    /// Mints a one-time code that binds an OAuth connector to `name`. With `create`, a missing agent is created
+    /// when the code is redeemed (not now, so an unused code leaves no agent behind). Returns (code, agent, expires_at).
+    pub async fn create_binding_code(&self, name: &str, create: bool, ttl_ms: i64) -> Result<(String, String, i64)> {
+        let n = valid_name(name)?;
+        match self.agent_state(&n).await? {
+            Some(AgentState::Disabled) => {
+                return Err(Error::invalid(format!("Agent \"{n}\" is disabled."), "Re-enable it with admin_enable_agent first."));
+            }
+            None if !create => {
+                return Err(Error::new(
+                    ErrorCode::NotFound,
+                    format!("Agent \"{n}\" not found."),
+                    "Pass create: true to create it when the code is used.",
+                ));
+            }
+            _ => {}
+        }
+        let code = generate_binding_code();
+        let now = now_ms();
+        let expires_at = now + ttl_ms;
+        self.run(
+            "INSERT INTO binding_codes (code_hash, agent_name, create_agent, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            &[P::S(&sha256_hex(&code)), P::S(&n), P::I(create as i64), P::I(now), P::I(expires_at)],
+        )
+        .await?;
+        self.audit("binding_code_created", "admin", Some(&n), None).await?;
+        Ok((code, n, expires_at))
+    }
+
+    /// Consumes a binding code: the row is deleted whether or not it is still valid, so a code works at most once
+    /// even under concurrent use. Returns (agent, create) for an unexpired code, None otherwise.
+    pub async fn redeem_binding_code(&self, code: &str) -> Result<Option<(String, bool)>> {
+        if !code.starts_with("amb_") {
+            return Ok(None);
+        }
+        #[derive(Deserialize)]
+        struct R {
+            agent_name: String,
+            create_agent: f64,
+            expires_at: f64,
+        }
+        let row = self
+            .first::<R>(
+                "DELETE FROM binding_codes WHERE code_hash = ? RETURNING agent_name, create_agent, expires_at",
+                &[P::S(&sha256_hex(code))],
+            )
+            .await?;
+        Ok(row.filter(|r| (r.expires_at as i64) > now_ms()).map(|r| (r.agent_name, r.create_agent != 0.0)))
+    }
+
     // ---- cleanup ----
 
     /// Deletes rows whose expires_at has passed (at most `batch` per table). NULL expiry is never deleted.
@@ -772,8 +825,8 @@ impl Store {
     pub async fn cleanup(&self, batch: i64) -> CleanupResult {
         let now = now_ms();
         let mut failed = vec![];
-        let mut counts = [0usize; 3];
-        for (i, table) in ["messages", "audit_log", "mcp_sessions"].iter().enumerate() {
+        let mut counts = [0usize; 4];
+        for (i, table) in ["messages", "audit_log", "mcp_sessions", "binding_codes"].iter().enumerate() {
             let sql = format!(
                 "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT ?)"
             );
@@ -785,7 +838,7 @@ impl Store {
                 }
             }
         }
-        CleanupResult { messages: counts[0], audit: counts[1], sessions: counts[2], failed }
+        CleanupResult { messages: counts[0], audit: counts[1], sessions: counts[2], binding_codes: counts[3], failed }
     }
 }
 
