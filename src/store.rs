@@ -8,9 +8,12 @@ use worker::{D1Database, D1PreparedStatement};
 use crate::config::{BlockedFeedback, Config};
 use crate::crypto::{generate_binding_code, generate_key, new_id, sha256_hex};
 use crate::errors::{Error, ErrorCode, Result};
+use crate::plans::{period, period_end_ms, Plan, PLAN_NAMES};
 
 const DAY_MS: i64 = 86_400_000;
 const TOUCH_INTERVAL_MS: i64 = 60_000;
+/// The account every agent belongs to until a deployment has more than one.
+pub const DEFAULT_ACCOUNT: &str = "default";
 pub const MAX_SUBJECT_CHARS: usize = 200;
 pub const MAX_BODY_BYTES: usize = 32_768;
 pub const MAX_DATA_BYTES: usize = 65_536;
@@ -190,6 +193,20 @@ pub struct AckResult {
     pub failed: Vec<AckFailed>,
 }
 
+/// An account's plan and what it has used in the current period. Limits are null when not enforced.
+#[derive(Debug, Serialize)]
+pub struct Usage {
+    pub account: String,
+    pub plan: Plan,
+    pub enforced: bool,
+    pub period: String,
+    pub resets_at: String,
+    pub messages_sent: i64,
+    pub messages_limit: Option<i64>,
+    pub agents: i64,
+    pub agents_limit: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CleanupResult {
     pub messages: usize,
@@ -344,12 +361,16 @@ impl Store {
         if self.exists("SELECT 1 AS x FROM agents WHERE name = ?", &[P::S(&n)]).await? {
             return Err(dup());
         }
+        self.require_agent_slot(DEFAULT_ACCOUNT).await?;
         let key = generate_key();
         let key_id = new_id();
         let hash = sha256_hex(&key);
         let now = now_ms();
         let batch = vec![
-            self.stmt("INSERT INTO agents (name, description, created_at) VALUES (?, ?, ?)", &[P::S(&n), P::S(description), P::I(now)])?,
+            self.stmt(
+                "INSERT INTO agents (name, description, created_at, account_id) VALUES (?, ?, ?, ?)",
+                &[P::S(&n), P::S(description), P::I(now), P::S(DEFAULT_ACCOUNT)],
+            )?,
             self.stmt(
                 "INSERT INTO keys (id, agent_name, key_hash, created_at) VALUES (?, ?, ?, ?)",
                 &[P::S(&key_id), P::S(&n), P::S(&hash), P::I(now)],
@@ -394,6 +415,11 @@ impl Store {
 
     pub async fn set_disabled(&self, name: &str, disabled: bool) -> Result<()> {
         let n = self.require_agent(name).await?;
+        if !disabled && self.exists("SELECT 1 AS x FROM agents WHERE name = ? AND disabled = 1", &[P::S(&n)]).await? {
+            // Re-enabling takes an agent slot again.
+            let account = self.account_of(&n).await?.0;
+            self.require_agent_slot(&account).await?;
+        }
         self.run("UPDATE agents SET disabled = ? WHERE name = ?", &[P::I(disabled as i64), P::S(&n)]).await?;
         self.audit(if disabled { "agent_disabled" } else { "agent_enabled" }, "admin", Some(&n), None).await
     }
@@ -516,6 +542,106 @@ impl Store {
         Ok(())
     }
 
+    // ---- accounts and usage ----
+
+    /// The account an agent belongs to, with its plan. Unknown agents and unknown plans fall back to the
+    /// default account and the free plan, the most restrictive answer.
+    async fn account_of(&self, agent: &str) -> Result<(String, Plan)> {
+        #[derive(Deserialize)]
+        struct R {
+            account_id: String,
+            plan: Option<String>,
+        }
+        let r = self
+            .first::<R>(
+                "SELECT a.account_id, c.plan FROM agents a LEFT JOIN accounts c ON c.id = a.account_id WHERE a.name = ?",
+                &[P::S(agent)],
+            )
+            .await?;
+        Ok(match r {
+            Some(r) => (r.account_id, r.plan.as_deref().and_then(Plan::parse).unwrap_or(Plan::Free)),
+            None => (DEFAULT_ACCOUNT.to_string(), Plan::Free),
+        })
+    }
+
+    async fn plan_of(&self, account: &str) -> Result<Plan> {
+        #[derive(Deserialize)]
+        struct R {
+            plan: String,
+        }
+        let r = self.first::<R>("SELECT plan FROM accounts WHERE id = ?", &[P::S(account)]).await?;
+        let Some(r) = r else {
+            return Err(Error::new(ErrorCode::NotFound, format!("Account \"{account}\" does not exist."), "The only account is \"default\"."));
+        };
+        Ok(Plan::parse(&r.plan).unwrap_or(Plan::Free))
+    }
+
+    async fn messages_sent(&self, account: &str, usage_period: &str) -> Result<i64> {
+        self.count("SELECT messages_sent AS n FROM usage_counters WHERE account_id = ? AND period = ?", &[P::S(account), P::S(usage_period)]).await
+    }
+
+    async fn active_agents(&self, account: &str) -> Result<i64> {
+        self.count("SELECT COUNT(*) AS n FROM agents WHERE account_id = ? AND disabled = 0", &[P::S(account)]).await
+    }
+
+    fn quota_error(&self, message: String, now: i64) -> Error {
+        let upgrade = match &self.config.billing_upgrade_url {
+            Some(url) => format!("upgrade the plan at {url}"),
+            None => "ask the operator to raise the plan".to_string(),
+        };
+        Error::new(
+            ErrorCode::QuotaExceeded,
+            message,
+            format!("Tell your user: {upgrade}. Message usage resets at {}. See get_usage.", iso(period_end_ms(now))),
+        )
+    }
+
+    /// Fails with quota_exceeded when the account cannot take one more active agent.
+    async fn require_agent_slot(&self, account: &str) -> Result<()> {
+        if !self.config.billing_enabled {
+            return Ok(());
+        }
+        let plan = self.plan_of(account).await?;
+        let max = plan.limits().max_agents;
+        if self.active_agents(account).await? >= max {
+            return Err(self.quota_error(format!("The account already has {max} active agents, the limit of the {} plan.", plan.as_str()), now_ms()));
+        }
+        Ok(())
+    }
+
+    pub async fn usage(&self, account: &str) -> Result<Usage> {
+        let plan = self.plan_of(account).await?;
+        let now = now_ms();
+        let usage_period = period(now);
+        let enforced = self.config.billing_enabled;
+        let limits = plan.limits();
+        Ok(Usage {
+            account: account.to_string(),
+            plan,
+            enforced,
+            resets_at: iso(period_end_ms(now)),
+            messages_sent: self.messages_sent(account, &usage_period).await?,
+            messages_limit: enforced.then_some(limits.monthly_messages),
+            agents: self.active_agents(account).await?,
+            agents_limit: enforced.then_some(limits.max_agents),
+            period: usage_period,
+        })
+    }
+
+    pub async fn usage_for_agent(&self, agent: &str) -> Result<Usage> {
+        let account = self.account_of(&normalize_name(agent)).await?.0;
+        self.usage(&account).await
+    }
+
+    pub async fn set_plan(&self, account: &str, plan: &str) -> Result<()> {
+        let Some(p) = Plan::parse(plan) else {
+            return Err(Error::invalid(format!("Unknown plan \"{plan}\"."), format!("Use one of: {}.", PLAN_NAMES.join(", "))));
+        };
+        self.plan_of(account).await?; // not_found if missing
+        self.run("UPDATE accounts SET plan = ? WHERE id = ?", &[P::S(p.as_str()), P::S(account)]).await?;
+        self.audit("plan_changed", "admin", Some(account), Some(p.as_str())).await
+    }
+
     // ---- messages ----
 
     pub async fn send(&self, from_raw: &str, input: SendInput) -> Result<SendResult> {
@@ -527,6 +653,21 @@ impl Store {
             valid_name(&to)?;
         }
         let now = now_ms();
+        let (account, plan) = self.account_of(&from).await?;
+        let usage_period = period(now);
+        // How many more messages this account may send this period; None when limits are not enforced.
+        let remaining: Option<i64> = if self.config.billing_enabled {
+            let left = plan.limits().monthly_messages - self.messages_sent(&account, &usage_period).await?;
+            if left <= 0 {
+                return Err(self.quota_error(
+                    format!("Your account has used all {} messages of the {} plan for {usage_period}.", plan.limits().monthly_messages, plan.as_str()),
+                    now,
+                ));
+            }
+            Some(left)
+        } else {
+            None
+        };
         let mut thread_id = new_id();
         let mut reply_to: Option<String> = None;
         if let Some(r) = input.reply_to.as_deref().filter(|r| !r.is_empty()) {
@@ -595,6 +736,12 @@ impl Store {
                 failed.push(Failed { agent: r, code: ErrorCode::InboxFull });
                 continue;
             }
+            // Checked last, so a recipient that would fail anyway does not use up quota, and after the block
+            // check so a silently blocked message counts like a delivered one.
+            if remaining.is_some_and(|left| delivered.len() as i64 >= left) {
+                failed.push(Failed { agent: r, code: ErrorCode::QuotaExceeded });
+                continue;
+            }
             let id = new_id();
             first_id.get_or_insert_with(|| id.clone());
             stmts.push(self.stmt(
@@ -624,6 +771,14 @@ impl Store {
             Some(&input.subject),
             Some(&input.body),
         )?);
+        if !delivered.is_empty() {
+            // Same batch as the message rows: usage and messages are written together or not at all.
+            stmts.push(self.stmt(
+                "INSERT INTO usage_counters (account_id, period, messages_sent) VALUES (?, ?, ?)
+                 ON CONFLICT (account_id, period) DO UPDATE SET messages_sent = messages_sent + excluded.messages_sent",
+                &[P::S(&account), P::S(&usage_period), P::I(delivered.len() as i64)],
+            )?);
+        }
         self.db.batch(stmts).await?;
         Ok(SendResult { id: first_id.unwrap_or_else(new_id), thread_id, delivered, failed })
     }

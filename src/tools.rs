@@ -7,7 +7,7 @@ use worker::RateLimiter;
 use crate::auth::Identity;
 use crate::errors::{Error, ErrorCode, Result};
 use crate::oauth::Provider;
-use crate::store::{iso, parse_iso, SendInput, Store, MAX_ACK_IDS};
+use crate::store::{iso, parse_iso, SendInput, Store, DEFAULT_ACCOUNT, MAX_ACK_IDS};
 
 pub const AUDIT_DEFAULT_LIMIT: i64 = 100;
 pub const AUDIT_MAX_LIMIT: i64 = 1000;
@@ -30,6 +30,7 @@ fn s(desc: &str) -> Json {
 }
 
 const AGENT_NAME: &str = "Agent name (case-insensitive).";
+const ACCOUNT_ID: &str = "Account id; defaults to \"default\".";
 
 pub fn agent_tools() -> Vec<ToolDef> {
     let t = |name, description: &str, schema| ToolDef { name, description: description.to_string(), schema };
@@ -38,7 +39,7 @@ pub fn agent_tools() -> Vec<ToolDef> {
         t("list_agents", "Active agents you can message: name and description.", obj(json!({}), &[])),
         t(
             "send_message",
-            "Send a message to an agent, or to \"all\" (every other active agent). Returns id, thread_id, delivered[] and failed[] ({agent, code}).",
+            "Send a message to an agent, or to \"all\" (every other active agent). Returns id, thread_id, delivered[] and failed[] ({agent, code}). Fails with quota_exceeded when the account's monthly message limit is used up.",
             obj(
                 json!({
                     "to": s("Recipient agent name, or \"all\" to broadcast."),
@@ -75,6 +76,11 @@ pub fn agent_tools() -> Vec<ToolDef> {
             "update_profile",
             "Update your description, shown to other agents in list_agents.",
             obj(json!({ "description": s("New description.") }), &["description"]),
+        ),
+        t(
+            "get_usage",
+            "Your account's plan and usage this period: messages sent and active agents, with their limits (null when limits are not enforced) and when message usage resets.",
+            obj(json!({}), &[]),
         ),
     ]
 }
@@ -149,6 +155,16 @@ pub fn admin_tools() -> Vec<ToolDef> {
             "Revoke one OAuth grant of an agent; its access and refresh tokens stop working. Grant ids come from admin_list_agents.",
             obj(json!({ "agent": s(AGENT_NAME), "grant_id": s("OAuth grant id.") }), &["agent", "grant_id"]),
         ),
+        t(
+            "admin_get_usage",
+            "An account's plan and usage this period: messages sent and active agents, with their limits (null when limits are not enforced).",
+            obj(json!({ "account": s(ACCOUNT_ID) }), &[]),
+        ),
+        t(
+            "admin_set_plan",
+            "Set an account's plan: free, pro or team. Limits apply only when BILLING_ENABLED is true.",
+            obj(json!({ "account": s(ACCOUNT_ID), "plan": s("free, pro or team.") }), &["plan"]),
+        ),
     ]
 }
 
@@ -215,6 +231,13 @@ fn opt_int(a: &Map<String, Json>, k: &str) -> Option<i64> {
     a.get(k).and_then(Json::as_f64).map(|n| n as i64)
 }
 
+fn account_arg(a: &Map<String, Json>) -> String {
+    match str_arg(a, "account").trim() {
+        "" => DEFAULT_ACCOUNT.to_string(),
+        s => s.to_lowercase(),
+    }
+}
+
 fn ok() -> Json {
     json!({ "ok": true })
 }
@@ -260,6 +283,7 @@ pub async fn call(identity: &Identity, name: &str, a: &Map<String, Json>, cx: &C
             "unblock_sender" => store.unblock(me, str_arg(a, "agent")).await.map(|_| ok()),
             "list_blocked" => Ok(json!({ "blocked": store.list_blocked(me).await? })),
             "update_profile" => store.update_profile(me, str_arg(a, "description")).await.map(|_| ok()),
+            "get_usage" => Ok(serde_json::to_value(store.usage_for_agent(me).await?)?),
             _ => Err(unknown_tool(name)),
         },
         Identity::Admin => match name {
@@ -331,6 +355,8 @@ pub async fn call(identity: &Identity, name: &str, a: &Map<String, Json>, cx: &C
                 store.audit("oauth_revoked", "admin", Some(&agent), Some(grant)).await?;
                 Ok(ok())
             }
+            "admin_get_usage" => Ok(serde_json::to_value(store.usage(&account_arg(a)).await?)?),
+            "admin_set_plan" => store.set_plan(&account_arg(a), str_arg(a, "plan")).await.map(|_| ok()),
             _ => Err(unknown_tool(name)),
         },
     }
@@ -352,7 +378,7 @@ mod tests {
     fn agent_tool_names() {
         assert_eq!(
             names(agent_tools()),
-            vec!["whoami", "list_agents", "send_message", "check_inbox", "ack", "read_thread", "block_sender", "unblock_sender", "list_blocked", "update_profile"]
+            vec!["whoami", "list_agents", "send_message", "check_inbox", "ack", "read_thread", "block_sender", "unblock_sender", "list_blocked", "update_profile", "get_usage"]
         );
     }
 

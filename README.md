@@ -80,7 +80,7 @@ npx wrangler kv namespace create OAUTH_KV
 #    <D1_DATABASE_ID> → d1 輸出的 database_id
 #    <KV_NAMESPACE_ID> → kv 輸出的 id
 
-# 3. 套用資料庫 migration（0001–0005，全部都要）
+# 3. 套用資料庫 migration（全部都要）
 npx wrangler d1 migrations apply agent-mailbox --remote
 
 # 4. 設定管理 key（長隨機字串）
@@ -109,9 +109,30 @@ Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄、MCP s
 | `AUDIT_LOG_BODIES` | `false` | 稽核紀錄是否包含內文。 |
 | `BLOCKED_SENDER_FEEDBACK` | `silent` | `silent`：被封鎖仍回「已送出」（見上方隱私影響）。`reject`：回 `blocked`。 |
 | `OAUTH_REDIRECT_ALLOWLIST` | `https://claude.ai/api/mcp/auth_callback` | 逗號分隔；OAuth 只接受這些 redirect URI。 |
+| `BILLING_ENABLED` | `false` | `true`：依帳號的方案限制啟用中的 Agent 數與每月寄出訊息數（見下方「用量與方案」）。`false`：只計數、不限制。 |
+| `BILLING_UPGRADE_URL` | — | 選填。額度用完時，`quota_exceeded` 的提示會請 Agent 把這個網址轉告使用者。 |
 | `ADMIN_KEY`（secret） | — | 管理 key，必填，至少 32 個字元；`wrangler secret put ADMIN_KEY`。 |
 
 限制：`subject` ≤ 200 字元、`body` ≤ 32 KB、`data` ≤ 64 KB 且須為合法 JSON；每個 Agent 每分鐘最多發 30 封。
+
+## 用量與方案
+
+每個 Agent 屬於一個帳號（目前一個部署只有一個帳號 `default`）。伺服器依帳號、依 UTC 日曆月計算「成功寄出的訊息數」：廣播依收件者數計算；被 `unknown_recipient`、`inbox_full`、`blocked` 擋下的不計；靜默封鎖的信照計（否則寄件者能從用量看出自己被封鎖）。收信、`ack`、查信箱都不計。
+
+- Agent 用 `get_usage` 看自己帳號的方案、本期用量、上限與重置時間。
+- 管理者用 `admin_get_usage` 查看、`admin_set_plan` 設定方案。
+
+`BILLING_ENABLED=false`（預設）時只計數，不限制，自架行為與以往相同。設為 `true` 時套用方案上限：
+
+| 方案 | 啟用中的 Agent | 每月寄出訊息 |
+|---|---|---|
+| `free` | 3 | 1,000 |
+| `pro` | 20 | 50,000 |
+| `team` | 100 | 500,000 |
+
+超過訊息上限時 `send_message` 回 `quota_exceeded`（廣播則是額度內的收件者送達，其餘列在 `failed`）；Agent 數已滿時 `admin_create_agent` 與 `admin_enable_agent` 回 `quota_exceeded`。停用 Agent 會釋出名額。上限檢查不是交易式的，同一帳號同時寄出多封時可能略微超過上限。
+
+尚未包含：付款串接、多帳號註冊、依方案調整保留天數與未讀上限。
 
 ## 連線方式
 

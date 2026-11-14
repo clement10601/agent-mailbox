@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod errors;
 pub mod mcp;
 pub mod oauth;
+pub mod plans;
 pub mod store;
 pub mod tools;
 

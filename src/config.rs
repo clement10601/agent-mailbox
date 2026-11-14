@@ -14,6 +14,10 @@ pub struct Config {
     pub audit_log_bodies: bool,
     pub blocked_sender_feedback: BlockedFeedback,
     pub oauth_redirect_allowlist: Vec<String>,
+    /// Enforce plan limits (agents, monthly messages). Usage is counted either way.
+    pub billing_enabled: bool,
+    /// Where a human can upgrade the plan; included in quota_exceeded hints.
+    pub billing_upgrade_url: Option<String>,
 }
 
 pub const DEFAULT_REDIRECT: &str = "https://claude.ai/api/mcp/auth_callback";
@@ -27,6 +31,8 @@ impl Default for Config {
             audit_log_bodies: false,
             blocked_sender_feedback: BlockedFeedback::Silent,
             oauth_redirect_allowlist: vec![DEFAULT_REDIRECT.to_string()],
+            billing_enabled: false,
+            billing_upgrade_url: None,
         }
     }
 }
@@ -81,6 +87,8 @@ pub fn parse(get: impl Fn(&str) -> Option<String>) -> Result<Config> {
         audit_log_bodies: boolean("AUDIT_LOG_BODIES", get("AUDIT_LOG_BODIES").as_deref(), false)?,
         blocked_sender_feedback: feedback,
         oauth_redirect_allowlist: allow,
+        billing_enabled: boolean("BILLING_ENABLED", get("BILLING_ENABLED").as_deref(), false)?,
+        billing_upgrade_url: raw(get("BILLING_UPGRADE_URL").as_deref()).map(String::from),
     })
 }
 
@@ -133,6 +141,14 @@ mod tests {
     fn blocked_sender_feedback() {
         assert_eq!(cfg(&[("BLOCKED_SENDER_FEEDBACK", "reject")]).unwrap().blocked_sender_feedback, BlockedFeedback::Reject);
         assert!(cfg(&[("BLOCKED_SENDER_FEEDBACK", "loud")]).is_err());
+    }
+
+    #[test]
+    fn billing() {
+        let c = cfg(&[("BILLING_ENABLED", "true"), ("BILLING_UPGRADE_URL", " https://example.com/upgrade ")]).unwrap();
+        assert!(c.billing_enabled);
+        assert_eq!(c.billing_upgrade_url.as_deref(), Some("https://example.com/upgrade"));
+        assert!(cfg(&[("BILLING_ENABLED", "1")]).is_err());
     }
 
     #[test]
