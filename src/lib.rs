@@ -148,6 +148,11 @@ async fn route(mut req: Request, env: &Env) -> Result<Response> {
     if method == worker::Method::Get && path == "/healthz" {
         return Ok(Response::ok("ok")?);
     }
+    if method == worker::Method::Get && path == "/" {
+        let mut res = Response::ok(include_str!("landing.html"))?;
+        res.headers_mut().set("content-type", "text/html; charset=utf-8")?;
+        return Ok(res);
+    }
     let d = deps(env)?;
     if is_mcp_path(&path) {
         return handle_mcp(req, &origin, &d).await;
