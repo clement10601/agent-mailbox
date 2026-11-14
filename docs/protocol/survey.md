@@ -1,6 +1,6 @@
 # Agent 訊息協定調查（2026-11）
 
-> 狀態：草稿，2026-11-14。目的：在把 agent-mailbox 整理成一份協定規格之前，先看清楚已經有哪些協定、名稱是否衝突、我們的定位在哪裡。規格草案見 [spec-draft.md](spec-draft.md)。
+> 狀態：草稿，2026-11-14。目的：在把 agent-mailbox 整理成一份協定規格之前，先看清楚已經有哪些協定、名稱是否衝突、我們的定位在哪裡。規格見 [spec.md](spec.md)。
 >
 > **命名**：原本暫定的「Agentic Messaging Protocol（AMP）」與既有的 23blocks「Agent Messaging Protocol（AMP）」幾乎同名（見 §2.1），因此改名為 **SAMP（Secure Agent Messaging Protocol）**。另外留意：天文學界的 IVOA 有一個同縮寫的「Simple Application Messaging Protocol（SAMP）」，用於桌面天文軟體互通，領域不同、不易混淆，但對外介紹時建議寫全名。
 
@@ -25,7 +25,7 @@
   - **金鑰在客戶端。** claude.ai 自訂連接器、Claude Desktop 等 MCP 客戶端沒有地方放私鑰、也不會幫工具呼叫簽章，所以 23blocks AMP 在純 MCP 環境下得由伺服器代簽，失去它設計的意義。我們反過來以伺服器背書為基礎，端到端簽章做成選配擴充。
   - **本機優先 vs 中繼站。** 它主張信存在 Agent 自己機器上；我們是有 TTL 的託管中繼，`ack` 後清除內容。
   - **MCP 不在它的範圍內。** 它的介面是 REST + WebSocket + CLI；我們的主要綁定就是 MCP 工具。
-- 結論：名稱衝突，題材重疊，但身分模型根本不同。建議改名，信封欄位盡量同名，並提供雙向轉接（規格 §12.3）。
+- 結論：名稱衝突，題材重疊，但身分模型根本不同。建議改名，信封欄位盡量同名，並提供雙向轉接（規格 §14.2）。
 
 ### 2.2 A2A（Agent2Agent Protocol）
 
@@ -34,7 +34,7 @@
 - 傳輸：JSON-RPC 2.0 over HTTP、SSE 串流、gRPC、HTTP+JSON；長任務可設定 push notification（webhook）。
 - 發現：Agent Card（`/.well-known/agent-card.json`）描述技能、端點與驗證方式。
 - 與我們的差異：A2A 假設對方有可連線的 HTTP 端點、而且「現在」在線；它是**委派任務的 RPC**，不是信箱。對方不在線、或對方根本只是一個在 claude.ai 對話中偶爾被叫起來的 Agent 時，A2A 沒有存了再轉的語意（這正是 `draft-chapman-a2a-offline-delivery` 想補的洞）。
-- 結論：互補。SAMP 可以在 Agent Card 上宣告一個「mailbox」技能，讓 A2A 客戶端把訊息投進信箱（規格 §12.2）；反過來，信箱中的 `task` 型訊息也可以轉成 A2A 的 Task。
+- 結論：互補。SAMP 可以在 Agent Card 上宣告一個「mailbox」技能，讓 A2A 客戶端把訊息投進信箱（規格 §14.1）；反過來，信箱中的 `task` 型訊息也可以轉成 A2A 的 Task。
 
 ### 2.3 ACP（IBM / BeeAI Agent Communication Protocol）
 
@@ -47,7 +47,7 @@
 - 來源：<https://agent-network-protocol.com/>、<https://github.com/agent-network-protocol/AgentNetworkProtocol>。Apache-2.0，社群主導，目前規格 1.2；W3C 有社群組在討論，IETF 有以它為基礎的框架草案（`draft-zyyhl-agent-networks-framework`）。
 - 模型：三層——身分層（W3C DID，`did:wba`，端到端加密）、元協定層（Agent 協商要用什麼協定）、應用層（Agent 描述、發現）。1.2 版有完整的即時訊息 profile（直接訊息、群組、裝置綁定 E2EE、附件、聯邦）。
 - 與我們的差異：目標是「開放、跨網域的 Agent 網際網路」，身分去中心化、金鑰在 Agent 端。對單一擁有者的私人信箱來說過重，而且同樣不適合無法持有金鑰的 MCP 客戶端。
-- 結論：不採用，但身分層若日後要做跨網域聯邦，`did:web` 類的方式是可以借鏡的方向（規格 §13 開放問題）。
+- 結論：不採用，但身分層若日後要做跨網域聯邦，`did:web` 類的方式是可以借鏡的方向；SAMP 1.0 的聯邦改採「網域 + provider 簽章」（規格 §13）。
 
 ### 2.5 MCP（Model Context Protocol）
 
@@ -70,7 +70,7 @@
 
 - **AgentMail、Shipmail、Dead Simple Email**：給 Agent 真正的 email 信箱（SMTP／IMAP + REST + MCP）。好處是能跟人類收發；代價是沿用 email 的寄件者偽造、垃圾信問題，而且身分仍是「一個信箱」而非「一個 Agent」。我們刻意不走 SMTP。
 - **各種 file-based agent mailbox skill**（本機 JSON 檔、同一台機器上的 Agent 互傳）：說明需求普遍，但都沒有跨機器與身分。
-- **FIPA ACL／KQML**（1990–2000 年代）：古典多 Agent 系統的訊息語言，提供 performative（request、inform、propose…）的概念。我們的 `kind` 欄位（§6）取其精神但只保留少數幾種。
+- **FIPA ACL／KQML**（1990–2000 年代）：古典多 Agent 系統的訊息語言，提供 performative（request、inform、propose…）的概念。我們的 `kind` 欄位（規格 §6.5）取其精神但只保留少數幾種。
 
 ## 3. SAMP 的定位
 
@@ -85,13 +85,13 @@
 | 訊息保存 | 不適用 | 本機優先，中繼 7 天 | 視實作 | 中繼 TTL，`ack` 即清內容 |
 | 背壓 | 無明確定義 | 佇列 TTL | 視 profile | 未讀上限 → `inbox_full` |
 | 注入防護 | 不在範圍 | 信任標註、隔離 | 不在範圍 | 伺服器標記來源 + 收件端隔離閱讀 + 內容權限規則 |
-| 跨 provider | 是 | 是（聯邦） | 是 | v0.1 否（單一 provider），保留位址格式 |
+| 跨 provider | 是 | 是（聯邦） | 是 | 選配（`federation:v1`，provider 簽章） |
 
 ### 刻意不做的事（非目標）
 
 - 不做任務生命週期（交給 A2A；我們只定義交接合約的資料格式）。
 - 不做即時串流與群組加密（交給 SLIM 之類）。
-- v0.1 不做跨 provider 聯邦，但位址格式先保留擴充空間。
+- 聯邦不是核心：以選配的 `federation:v1` profile 提供，預設關閉。
 - 不做工具或技能的描述格式（交給 MCP／Agent Skills）。
 
 ## 4. 參考資料

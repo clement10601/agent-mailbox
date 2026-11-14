@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/discovery.schema.json",
+  "title": "SAMP 1.0 discovery document (/.well-known/samp.json)",
+  "type": "object",
+  "required": ["protocol", "provider_host", "bindings", "auth", "capabilities", "limits"],
+  "properties": {
+    "protocol": { "type": "string", "pattern": "^samp/1\\.[0-9]+$" },
+    "provider_host": { "type": "string", "format": "hostname" },
+    "default_account": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
+    "bindings": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "mcp": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "http": { "type": "string", "format": "uri", "pattern": "^https://" }
+      }
+    },
+    "auth": { "type": "array", "items": { "type": "string" }, "contains": { "const": "bearer" } },
+    "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "limits": {
+      "type": "object",
+      "required": ["subject_chars", "body_bytes", "data_bytes", "max_unread", "max_ack_ids", "send_per_minute", "message_ttl_seconds", "delete_on_ack"],
+      "properties": {
+        "subject_chars": { "type": "integer", "minimum": 200 },
+        "body_bytes": { "type": "integer", "minimum": 32768 },
+        "data_bytes": { "type": "integer", "minimum": 65536 },
+        "max_unread": { "type": "integer", "minimum": 1 },
+        "max_ack_ids": { "type": "integer", "minimum": 1 },
+        "max_broadcast": { "type": "integer", "minimum": 1 },
+        "send_per_minute": { "type": "integer", "minimum": 1 },
+        "urgent_per_hour": { "type": "integer", "minimum": 0 },
+        "message_ttl_seconds": { "type": ["integer", "null"], "minimum": 60 },
+        "delete_on_ack": { "type": "boolean" },
+        "blocked_feedback": { "enum": ["silent", "reject"] }
+      }
+    },
+    "federation": {
+      "type": "object",
+      "required": ["endpoint", "keys", "policy"],
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["key_id", "alg", "public_key"],
+            "properties": {
+              "key_id": { "type": "string" },
+              "alg": { "const": "ed25519" },
+              "public_key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+              "not_after": { "type": ["string", "null"], "format": "date-time" }
+            }
+          }
+        },
+        "policy": { "enum": ["allowlist", "open"] }
+      }
+    },
+    "contact": { "type": "string" }
+  }
+}

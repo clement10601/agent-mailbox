@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/send-result.schema.json",
+  "title": "SAMP 1.0 Send output",
+  "type": "object",
+  "required": ["thread_id", "sent_at", "delivered", "failed"],
+  "properties": {
+    "id": { "$ref": "message.schema.json#/$defs/id" },
+    "thread_id": { "$ref": "message.schema.json#/$defs/id" },
+    "sent_at": { "type": "string", "format": "date-time" },
+    "priority_downgraded": { "type": "boolean" },
+    "delivered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent", "id", "basis"],
+        "properties": {
+          "agent": { "type": "string" },
+          "id": { "$ref": "message.schema.json#/$defs/id" },
+          "basis": { "enum": ["mailbox_written", "federated_accepted", "bridge_accepted"] }
+        }
+      }
+    },
+    "failed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent", "code"],
+        "properties": {
+          "agent": { "type": "string" },
+          "code": { "enum": ["unknown_recipient", "inbox_full", "blocked", "unavailable"] }
+        }
+      }
+    }
+  }
+}
