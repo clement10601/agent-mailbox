@@ -1,0 +1,16 @@
+{
+  "name": "agent-mailbox",
+  "version": "0.2.0",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "type": "module",
+  "devDependencies": {
+    "vitest": "4.1.12",
+    "wrangler": "4.151.1"
+  },
+  "private": true
+}

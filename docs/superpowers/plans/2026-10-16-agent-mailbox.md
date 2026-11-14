@@ -303,7 +303,7 @@ it("migrations create all tables", async () => {
 ### Task 8: 開源文件與 CI
 
 **Files:**
-- Create: `README.md`、`LICENSE`（MIT，著作權人 `clement10601`，年份 2026）、`.github/workflows/ci.yml`、`docs/agent-instructions.md`
+- Create: `README.md`、`LICENSE`（GPL-3.0-only，著作權人 `clement10601`，年份 2026）、`.github/workflows/ci.yml`、`docs/agent-instructions.md`
 
 **Interfaces:**
 - Consumes: 全部功能；`docs/agent-instructions.md` 內容照規格第 12 節。

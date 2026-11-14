@@ -1,0 +1,37 @@
+name = "agent-mailbox"
+main = "build/index.js"
+compatibility_date = "2026-08-01"
+
+[build]
+command = "cargo install -q worker-build@^0.9 && worker-build --release"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "agent-mailbox"
+database_id = "<D1_DATABASE_ID>"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "<KV_NAMESPACE_ID>"
+
+[[ratelimits]]
+name = "AUTH_LIMITER"
+namespace_id = "740601"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "SEND_LIMITER"
+namespace_id = "740602"
+simple = { limit = 30, period = 60 }
+
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+DELETE_ON_ACK = "true"
+MESSAGE_TTL_DAYS = "7"
+MAX_UNREAD = "10"
+AUDIT_LOG_BODIES = "false"
+BLOCKED_SENDER_FEEDBACK = "silent"
+OAUTH_REDIRECT_ALLOWLIST = "https://claude.ai/api/mcp/auth_callback"

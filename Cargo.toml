@@ -1,0 +1,26 @@
+[package]
+name = "agent-mailbox"
+version = "0.2.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+worker = { version = "0.9", features = ["d1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen = "0.2"
+url = "2"
+js-sys = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "debuginfo"
