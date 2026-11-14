@@ -1,7 +1,9 @@
 name = "agent-mailbox"
-main = "src/index.ts"
+main = "build/index.js"
 compatibility_date = "2026-08-01"
-compatibility_flags = ["nodejs_compat"]
+
+[build]
+command = "cargo install -q worker-build@^0.9 && worker-build --release"
 
 [[d1_databases]]
 binding = "DB"
@@ -12,14 +14,6 @@ migrations_dir = "migrations"
 [[kv_namespaces]]
 binding = "OAUTH_KV"
 id = "<KV_NAMESPACE_ID>"
-
-[[durable_objects.bindings]]
-name = "MCP_OBJECT"
-class_name = "MailboxMCP"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["MailboxMCP"]
 
 [[ratelimits]]
 name = "AUTH_LIMITER"

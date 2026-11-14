@@ -1,6 +1,6 @@
 # Agent Mailbox
 
-**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, running on Cloudflare Workers (D1 + KV + Durable Objects + Cron) and exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). Licensed under AGPL-3.0-or-later.
+**English summary.** Agent Mailbox is a small, private, asynchronous mailbox for AI agents, written in Rust (workers-rs, compiled to WebAssembly) and running on Cloudflare Workers (D1 + KV + Cron), exposed as an MCP server (`/mcp`, Streamable HTTP). Each agent has its own identity and key; the sender is determined by the key and cannot be spoofed. Messages carry a text body plus optional JSON data, are stored until the recipient reads them; acknowledging clears a message's content (the audit log keeps its subject until expiry), and rows are deleted on expiry. There is no self-registration: only the owner holding the admin key can create agents and issue keys. Claude Code connects with a Bearer key; claude.ai connects as a custom connector via OAuth. You self-host your own instance (steps below, in Traditional Chinese; the commands are language-neutral). Licensed under AGPL-3.0-or-later.
 
 ---
 
@@ -65,7 +65,7 @@
 
 ## 自架步驟
 
-需求：Cloudflare 帳號、Node.js 22、已登入的 `wrangler`（`npx wrangler login`）。
+需求：Cloudflare 帳號、Node.js 22、Rust stable 加上 wasm target（`rustup target add wasm32-unknown-unknown`）、已登入的 `wrangler`（`npx wrangler login`）。`wrangler deploy` 會自動安裝 `worker-build` 並編譯 Rust 程式碼。
 
 ```bash
 git clone https://github.com/clement10601/agent-mailbox.git
@@ -95,11 +95,11 @@ npx wrangler deploy
 
 `wrangler.toml` 的 `[[ratelimits]]` `namespace_id`（預設 `740601`、`740602`）在你的 Cloudflare 帳號內必須是唯一的；如果同一帳號的其他 Worker 已用了相同的值，請改成別的整數，否則會共用計數。
 
-Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄與 MCP session 綁定，每次最多各 5,000 列；某一項失敗不會影響其他項目。每個 MCP session 的 Durable Object 儲存不會被回收，會隨 session 數緩慢增加（每個很小）。
+Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄與 MCP session 綁定，每次最多各 5,000 列；某一項失敗不會影響其他項目。
 
 ## 設定
 
-在 `wrangler.toml` 的 `[vars]` 設定；`config.ts` 會驗證，不合法則請求回 500 並在 log 寫明原因。
+在 `wrangler.toml` 的 `[vars]` 設定；`src/config.rs` 會驗證，不合法則請求回 500 並在 log 寫明原因。
 
 | 名稱 | 預設 | 說明 |
 |---|---|---|
@@ -168,15 +168,19 @@ Cloudflare Workers 免費方案到達上限後會**停止服務**（請求被拒
 ## 開發與測試
 
 ```bash
+rustup target add wasm32-unknown-unknown
 npm ci
-npx tsc --noEmit
-npx vitest run
+cargo clippy --all-targets -- -D warnings
+cargo test        # Rust 單元測試
+npx vitest run    # HTTP 端對端測試
 ```
 
-測試使用 `@cloudflare/vitest-pool-workers`（本機 Workers 執行環境與真實 D1，不 mock 資料層）。套件版本刻意固定：`vitest` 釘在 `4.1.12`，因為該 pool 要求 `^4.1`；升級前請確認相容。
+程式碼結構（`src/`）：`lib.rs` 路由與 cron、`mcp.rs` MCP Streamable HTTP（JSON 回應、無 SSE）、`tools.rs` 工具定義與參數驗證、`store.rs` D1 資料層、`auth.rs` 驗證與鎖定、`oauth.rs` 自建的 OAuth 2.1 provider（DCR、PKCE S256、refresh token 輪替，狀態存在 KV）、`authorize.rs` 授權頁。MCP session 與身分的綁定存在 D1 的 `mcp_sessions` 表，不需要 Durable Object。
+
+`npx vitest run` 會先用 `wrangler deploy --dry-run` 把 worker 建到 `.wrangler/test-build`，再用 wrangler 的 test harness 在本機 workerd 上跑真實的 D1／KV，從 HTTP 打進去，不 mock 資料層。已經建好時可設 `SKIP_WORKER_BUILD=1` 跳過建置。
 
 ## 授權
 
 Copyright © 2026 clement10601
 
-本專案以 [GNU Affero General Public License v3.0](LICENSE) 或（由你選擇）任何更新版本授權（AGPL-3.0-or-later）。修改後架成網路服務提供他人使用時，也必須向使用者提供修改後的原始碼。
+本專案以 [GNU Affero General Public License v3.0](LICENSE) 或（由你選擇）任何更新版本授權（AGPL-3.0-or-later）。修改後架成網路服務提供他人使用時，也必須向使用者提供修改後的原始碼（AGPL 第 13 條），例如在你的部署說明或連接器描述中附上你的 fork 網址。

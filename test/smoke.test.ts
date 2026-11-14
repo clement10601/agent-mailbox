@@ -1,15 +1,26 @@
-import { env, SELF } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
+import { startWorker, type Worker } from "./harness";
+
+let w: Worker;
+beforeAll(async () => {
+  w = await startWorker();
+});
 
 it("healthz returns ok", async () => {
-  const res = await SELF.fetch("https://x/healthz");
+  const res = await w.fetch("/healthz");
   expect(res.status).toBe(200);
   expect(await res.text()).toBe("ok");
 });
 
 it("migrations create all tables", async () => {
-  const { results } = await env.DB.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('agents','keys','messages','blocks','audit_log')"
-  ).all();
-  expect(results).toHaveLength(5);
+  const { results } = await w.db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('agents','keys','messages','blocks','audit_log','mcp_sessions')")
+    .all();
+  expect(results).toHaveLength(6);
+});
+
+it("unknown paths 404", async () => {
+  const res = await w.fetch("/elsewhere");
+  expect(res.status).toBe(404);
+  await res.text();
 });

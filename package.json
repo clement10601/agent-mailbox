@@ -1,25 +1,14 @@
 {
-  "name": "agent-mailbox-cf",
-  "version": "0.1.0",
+  "name": "agent-mailbox",
+  "version": "0.2.0",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "deploy": "wrangler deploy"
   },
   "type": "module",
-  "dependencies": {
-    "@cloudflare/workers-oauth-provider": "1.2.3",
-    "@modelcontextprotocol/sdk": "1.32.1",
-    "agents": "0.28.1",
-    "zod": "4.6.7"
-  },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.23.0",
-    "@cloudflare/workers-types": "5.20261016.1",
-    "typescript": "7.0.2",
     "vitest": "4.1.12",
     "wrangler": "4.151.1"
   },

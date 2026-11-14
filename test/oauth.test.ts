@@ -1,24 +1,16 @@
-import { SELF } from "cloudflare:test";
-import { env } from "cloudflare:workers";
-import { beforeEach, describe, expect, it } from "vitest";
-import { makeStore, resetDb } from "./helpers";
-import { Client } from "./mcp-client";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ADMIN_KEY, Client, admin, createAgent, startWorker, type Worker } from "./harness";
 
-async function clearKv(): Promise<void> {
-  let cursor: string | undefined;
-  do {
-    const page = await env.OAUTH_KV.list(cursor ? { cursor } : {});
-    await Promise.all(page.keys.map((k) => env.OAUTH_KV.delete(k.name)));
-    cursor = page.list_complete ? undefined : page.cursor;
-  } while (cursor);
+let w: Worker;
+beforeAll(async () => {
+  w = await startWorker();
+});
+beforeEach(() => w.reset());
+
+async function disable(name: string): Promise<void> {
+  await (await admin(w)).ok("admin_disable_agent", { agent: name });
 }
 
-beforeEach(async () => {
-  await resetDb();
-  await clearKv();
-});
-
-const ORIGIN = "https://x";
 const CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 
 let ipCounter = 0;
@@ -34,7 +26,7 @@ function b64url(bytes: Uint8Array): string {
 }
 
 async function registerClient(redirectUri: string): Promise<string> {
-  const res = await SELF.fetch(`${ORIGIN}/register`, {
+  const res = await w.fetch(`/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ redirect_uris: [redirectUri], token_endpoint_auth_method: "none", client_name: "claude" }),
@@ -64,11 +56,11 @@ async function startFlow(redirectUri = CALLBACK): Promise<Flow> {
     code_challenge_method: "S256",
     state: "st4te",
   });
-  return { clientId, redirectUri, verifier, url: `${ORIGIN}/authorize?${q}`, ip: freshIp() };
+  return { clientId, redirectUri, verifier, url: `/authorize?${q}`, ip: freshIp() };
 }
 
 async function getForm(flow: Flow): Promise<{ res: Response; html: string; cookie: string; csrf: string }> {
-  const res = await SELF.fetch(flow.url, { headers: { "CF-Connecting-IP": flow.ip } });
+  const res = await w.fetch(flow.url, { headers: { "CF-Connecting-IP": flow.ip } });
   const html = await res.text();
   const setCookie = res.headers.get("Set-Cookie") ?? "";
   const cookie = /__Host-csrf=([^;]+)/.exec(setCookie)?.[1] ?? "";
@@ -77,9 +69,8 @@ async function getForm(flow: Flow): Promise<{ res: Response; html: string; cooki
 }
 
 async function postForm(flow: Flow, cookie: string, fields: Record<string, string>): Promise<Response> {
-  return SELF.fetch(flow.url, {
+  return w.fetch(flow.url, {
     method: "POST",
-    redirect: "manual",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Cookie: `__Host-csrf=${cookie}`,
@@ -91,14 +82,14 @@ async function postForm(flow: Flow, cookie: string, fields: Record<string, strin
 
 async function authorize(flow: Flow, agentFields: Record<string, string>): Promise<string> {
   const { cookie, csrf } = await getForm(flow);
-  const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", ...agentFields });
+  const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, ...agentFields });
   expect(res.status).toBe(302);
   const loc = new URL(res.headers.get("Location")!);
   return loc.searchParams.get("code")!;
 }
 
 async function exchange(flow: Flow, code: string): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
-  const res = await SELF.fetch(`${ORIGIN}/token`, {
+  const res = await w.fetch(`/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -126,10 +117,9 @@ function expectFrameHeaders(res: Response) {
 
 describe("/authorize", () => {
   it("GET with an allowlisted redirect URI renders the form with a CSRF cookie and anti-framing headers", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
-    await store.createAgent("gone", "");
-    await store.setDisabled("gone", true);
+    await createAgent(w, "alpha");
+    await createAgent(w, "gone");
+    await disable("gone");
     const flow = await startFlow();
     const { res, html, cookie, csrf } = await getForm(flow);
     expect(res.status).toBe(200);
@@ -161,27 +151,25 @@ describe("/authorize", () => {
   });
 
   it("POST with a mismatched CSRF token -> 403", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const flow = await startFlow();
     const { cookie } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf: "not-the-token", admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
+    const res = await postForm(flow, cookie, { csrf: "not-the-token", admin_key: ADMIN_KEY, agent: "alpha" });
     expect(res.status).toBe(403);
     expectFrameHeaders(res);
-    const noCookie = await postForm(flow, "", { csrf: "", admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
+    const noCookie = await postForm(flow, "", { csrf: "", admin_key: ADMIN_KEY, agent: "alpha" });
     expect(noCookie.status).toBe(403);
   });
 
   it("POST with a wrong admin key -> 401 and an auth_failed audit row", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
     const res = await postForm(flow, cookie, { csrf, admin_key: "wrong", agent: "alpha" });
     expect(res.status).toBe(401);
     expectFrameHeaders(res);
     expect(await res.text()).toContain('name="admin_key"');
-    const row = await env.DB.prepare("SELECT actor FROM audit_log WHERE event = 'auth_failed'").first<{ actor: string }>();
+    const row = await w.db.prepare("SELECT actor FROM audit_log WHERE event = 'auth_failed'").first();
     expect(row?.actor).toBe(flow.ip);
   });
 
@@ -199,8 +187,7 @@ describe("/authorize", () => {
   });
 
   it("after 10 wrong keys the correct key from the same IP is also 429 and gets no code", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
     for (let i = 0; i < 10; i++) {
@@ -208,20 +195,19 @@ describe("/authorize", () => {
       expect(res.status).toBe(401);
       await res.text();
     }
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "alpha" });
     expect(res.status).toBe(429);
     expect(res.headers.get("Location")).toBeNull();
     await res.text();
-    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
-    expect(await env.OAUTH_KV.list({ prefix: "grant:" })).toMatchObject({ keys: [] });
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+    expect(await w.kv.list({ prefix: "grant:" })).toMatchObject({ keys: [] });
   });
 
   it("POST with the right admin key -> 302 to the redirect URI with a code, audited as oauth_granted", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "alpha" });
     expect(res.status).toBe(302);
     expectFrameHeaders(res);
     const loc = res.headers.get("Location")!;
@@ -229,86 +215,90 @@ describe("/authorize", () => {
     const u = new URL(loc);
     expect(u.searchParams.get("code")).toBeTruthy();
     expect(u.searchParams.get("state")).toBe("st4te");
-    const row = await env.DB.prepare("SELECT actor, target FROM audit_log WHERE event = 'oauth_granted'").first<{ actor: string; target: string }>();
+    const row = await w.db.prepare("SELECT actor, target FROM audit_log WHERE event = 'oauth_granted'").first();
     expect(row).toMatchObject({ actor: "admin", target: "alpha" });
   });
 
   it("a missing agent with the create checkbox is created and granted without revealing a key", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "Fresh-One", create: "1" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "Fresh-One", create: "1" });
     expect(res.status).toBe(302);
     const text = await res.text();
     expect(text).not.toContain("amk_");
     expect(res.headers.get("Location")).not.toContain("amk_");
-    expect(await env.DB.prepare("SELECT 1 FROM agents WHERE name = 'fresh-one'").first()).not.toBeNull();
-    const row = await env.DB.prepare("SELECT target FROM audit_log WHERE event = 'oauth_granted'").first<{ target: string }>();
+    expect(await w.db.prepare("SELECT 1 FROM agents WHERE name = 'fresh-one'").first()).not.toBeNull();
+    const row = await w.db.prepare("SELECT target FROM audit_log WHERE event = 'oauth_granted'").first();
     expect(row?.target).toBe("fresh-one");
   });
 
   it("a missing agent without the create checkbox -> 400 'not found', nothing created or granted", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "nobody" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "nobody" });
     expect(res.status).toBe(400);
     expectFrameHeaders(res);
     const html = await res.text();
     expect(html).toContain("not found");
     expect(html).toContain('name="admin_key"');
-    expect(await env.DB.prepare("SELECT 1 FROM agents WHERE name = 'nobody'").first()).toBeNull();
-    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+    expect(await w.db.prepare("SELECT 1 FROM agents WHERE name = 'nobody'").first()).toBeNull();
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
   });
 
   it("the create checkbox on an existing active agent just grants it", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "alpha", create: "1" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "alpha", create: "1" });
     expect(res.status).toBe(302);
-    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM keys WHERE agent_name = 'alpha'").first<{ n: number }>();
+    const n = await w.db.prepare("SELECT COUNT(*) AS n FROM keys WHERE agent_name = 'alpha'").first();
     expect(n!.n).toBe(1);
   });
 
   it("an invalid agent name -> 400", async () => {
     const flow = await startFlow();
     const { cookie, csrf } = await getForm(flow);
-    const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "Bad Name!", create: "1" });
+    const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "Bad Name!", create: "1" });
     expect(res.status).toBe(400);
     await res.text();
-    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM agents").first<{ n: number }>()).toEqual({ n: 0 });
+    expect(await w.db.prepare("SELECT COUNT(*) AS n FROM agents").first()).toEqual({ n: 0 });
   });
 
   it("a disabled agent -> 400, no grant, with or without the create checkbox", async () => {
-    const { store } = makeStore();
-    await store.createAgent("gone", "");
-    await store.setDisabled("gone", true);
+    await createAgent(w, "gone");
+    await disable("gone");
     for (const extra of [{}, { create: "1" }] as Record<string, string>[]) {
       const flow = await startFlow();
       const { cookie, csrf } = await getForm(flow);
-      const res = await postForm(flow, cookie, { csrf, admin_key: "test-admin-key-0123456789abcdef0123456789", agent: "gone", ...extra });
+      const res = await postForm(flow, cookie, { csrf, admin_key: ADMIN_KEY, agent: "gone", ...extra });
       expect(res.status).toBe(400);
       await res.text();
     }
-    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
-    expect(await env.DB.prepare("SELECT disabled FROM agents WHERE name = 'gone'").first()).toEqual({ disabled: 1 });
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'oauth_granted'").first()).toBeNull();
+    expect(await w.db.prepare("SELECT disabled FROM agents WHERE name = 'gone'").first()).toEqual({ disabled: 1 });
   });
 });
 
 describe("OAuth tokens on /mcp", () => {
   it("unauthenticated /mcp advertises the protected resource metadata", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/mcp`, { method: "POST", body: "{}" });
+    const res = await w.fetch(`/mcp`, { method: "POST", body: "{}" });
     expect(res.status).toBe(401);
     expect(res.headers.get("WWW-Authenticate")).toContain("resource_metadata");
     await res.text();
-    const meta = await SELF.fetch(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`);
+    const meta = await w.fetch(`/.well-known/oauth-protected-resource/mcp`);
     expect(meta.status).toBe(200);
-    expect(((await meta.json()) as { resource: string }).resource).toBe(`${ORIGIN}/mcp`);
+    // The harness serves over plain http, so the scheme follows the request.
+    const body = (await meta.json()) as { resource: string; authorization_servers: string[] };
+    expect(body.resource).toMatch(/^https?:\/\/x\/mcp$/);
+    const as = await w.fetch(`/.well-known/oauth-authorization-server`);
+    const asMeta = (await as.json()) as Record<string, unknown>;
+    expect(asMeta.issuer).toBe(body.authorization_servers[0]);
+    expect(asMeta.code_challenge_methods_supported).toEqual(["S256"]);
+    expect(asMeta.registration_endpoint).toMatch(/\/register$/);
   });
 
   it("issues a 1h access token and a refresh token", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const flow = await startFlow();
     const tok = await exchange(flow, await authorize(flow, { agent: "alpha" }));
     expect(tok.expires_in).toBe(3600);
@@ -316,28 +306,26 @@ describe("OAuth tokens on /mcp", () => {
   });
 
   it("the token acts as the chosen agent, bound to its session like a key", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
-    const c = new Client(await tokenFor("alpha"));
+    await createAgent(w, "alpha");
+    const c = new Client(w, await tokenFor("alpha"));
     await c.init();
     const names = await c.toolNames();
     expect(names).toContain("send_message");
     expect(names.some((n) => n.startsWith("admin_"))).toBe(false);
     const me = await c.call("whoami", {});
     expect(me.value.name).toBe("alpha");
-    const row = await env.DB.prepare("SELECT principal FROM mcp_sessions WHERE id = ?").bind(c.sessionId).first<{ principal: string }>();
+    const row = await w.db.prepare("SELECT principal FROM mcp_sessions WHERE id = ?").bind(c.sessionId).first();
     expect(row?.principal).toBe("agent:alpha");
-    const seen = await env.DB.prepare("SELECT last_seen_at FROM agents WHERE name = 'alpha'").first<{ last_seen_at: number | null }>();
+    const seen = await w.db.prepare("SELECT last_seen_at FROM agents WHERE name = 'alpha'").first();
     expect(seen?.last_seen_at).not.toBeNull();
   });
 
   it("another agent's token cannot use the session", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
-    await store.createAgent("beta", "");
-    const ca = new Client(await tokenFor("alpha"));
+    await createAgent(w, "alpha");
+    await createAgent(w, "beta");
+    const ca = new Client(w, await tokenFor("alpha"));
     await ca.init();
-    const spoof = new Client(await tokenFor("beta"));
+    const spoof = new Client(w, await tokenFor("beta"));
     spoof.sessionId = ca.sessionId;
     const res = await spoof.post({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     expect(res.status).toBe(404);
@@ -345,57 +333,53 @@ describe("OAuth tokens on /mcp", () => {
   });
 
   it("disabling the agent invalidates the token on the next request", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
-    const c = new Client(await tokenFor("alpha"));
+    await createAgent(w, "alpha");
+    const c = new Client(w, await tokenFor("alpha"));
     await c.init();
-    await store.setDisabled("alpha", true);
+    await disable("alpha");
     const res = await c.post({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} });
     expect(res.status).toBe(401);
     await res.text();
   });
 
   it("invalid OAuth-format tokens -> 401 every time, never counted, so the IP is not locked out", async () => {
-    const { store } = makeStore();
-    const a = await store.createAgent("alpha", "");
+    const a = await createAgent(w, "alpha");
     const ip = freshIp();
     const statuses: number[] = [];
     for (let i = 0; i < 15; i++) {
-      const res = await new Client("alpha:grant:secret", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      const res = await new Client(w, "alpha:grant:secret", ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
       await res.text();
       statuses.push(res.status);
     }
     expect(statuses).toEqual(Array(15).fill(401));
-    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
     // A static key from the same (shared egress) IP still works.
-    const good = new Client(a.key, ip);
+    const good = new Client(w, a.key, ip);
     await good.init();
     expect(await good.toolNames()).toContain("send_message");
   });
 
   it("a disabled agent's valid OAuth token -> 401 every time, never counted", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const token = await tokenFor("alpha");
-    await store.setDisabled("alpha", true);
+    await disable("alpha");
     const ip = freshIp();
     const statuses: number[] = [];
     for (let i = 0; i < 15; i++) {
-      const res = await new Client(token, ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      const res = await new Client(w, token, ip).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
       await res.text();
       statuses.push(res.status);
     }
     expect(statuses).toEqual(Array(15).fill(401));
-    expect(await env.DB.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
+    expect(await w.db.prepare("SELECT 1 FROM audit_log WHERE event = 'auth_failed'").first()).toBeNull();
   });
 
   it("admin over Bearer sees grant counts and admin_revoke_oauth kills the token", async () => {
-    const { store } = makeStore();
-    await store.createAgent("alpha", "");
+    await createAgent(w, "alpha");
     const token = await tokenFor("alpha");
     const grantId = token.split(":")[1];
 
-    const admin = new Client("test-admin-key-0123456789abcdef0123456789");
+    const admin = new Client(w, ADMIN_KEY);
     await admin.init();
     const list = await admin.call("admin_list_agents", {});
     const alpha = list.value.agents.find((a: { name: string }) => a.name === "alpha");
@@ -404,13 +388,82 @@ describe("OAuth tokens on /mcp", () => {
 
     const r = await admin.call("admin_revoke_oauth", { agent: "alpha", grant_id: grantId });
     expect(r.isError).toBe(false);
-    const row = await env.DB.prepare("SELECT actor, target, subject FROM audit_log WHERE event = 'oauth_revoked'").first();
+    const row = await w.db.prepare("SELECT actor, target, subject FROM audit_log WHERE event = 'oauth_revoked'").first();
     expect(row).toMatchObject({ actor: "admin", target: "alpha", subject: grantId });
 
-    const res = await new Client(token).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    const res = await new Client(w, token).post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
     expect(res.status).toBe(401);
     await res.text();
     const after = await admin.call("admin_list_agents", {});
     expect(after.value.agents.find((a: { name: string }) => a.name === "alpha").oauth_grants).toBe(0);
+  });
+});
+
+describe("token endpoint", () => {
+  it("rejects a reused code, a wrong verifier and an unknown client", async () => {
+    await createAgent(w, "alpha");
+    const flow = await startFlow();
+    const code = await authorize(flow, { agent: "alpha" });
+    const bad = await w.fetch(`/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: flow.redirectUri, client_id: flow.clientId, code_verifier: "wrong" }).toString(),
+    });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe("invalid_grant");
+    await exchange(flow, code);
+    const reused = await w.fetch(`/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: flow.redirectUri, client_id: flow.clientId, code_verifier: flow.verifier }).toString(),
+    });
+    expect(reused.status).toBe(400);
+    await reused.text();
+    const unknown = await w.fetch(`/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", code, client_id: "nope", code_verifier: flow.verifier }).toString(),
+    });
+    expect(unknown.status).toBe(401);
+    await unknown.text();
+  });
+
+  it("refresh rotates the refresh token and issues a working access token", async () => {
+    await createAgent(w, "alpha");
+    const flow = await startFlow();
+    const first = await exchange(flow, await authorize(flow, { agent: "alpha" }));
+    const refresh = async (token: string) =>
+      w.fetch(`/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: token, client_id: flow.clientId }).toString(),
+      });
+    const r = await refresh(first.refresh_token!);
+    expect(r.status).toBe(200);
+    const second = (await r.json()) as { access_token: string; refresh_token: string };
+    expect(second.refresh_token).not.toBe(first.refresh_token);
+    const old = await refresh(first.refresh_token!);
+    expect(old.status).toBe(400);
+    await old.text();
+    const c = await new Client(w, second.access_token).init();
+    expect((await c.ok("whoami")).name).toBe("alpha");
+  });
+
+  it("registration rejects non-https redirect URIs", async () => {
+    const res = await w.fetch(`/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ redirect_uris: ["http://evil.example/cb"], token_endpoint_auth_method: "none" }),
+    });
+    expect(res.status).toBe(400);
+    await res.text();
+  });
+
+  it("authorize requires PKCE S256", async () => {
+    const clientId = await registerClient(CALLBACK);
+    const q = new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: CALLBACK, state: "s" });
+    const res = await w.fetch(`/authorize?${q}`);
+    expect(res.status).toBe(400);
+    await res.text();
   });
 });

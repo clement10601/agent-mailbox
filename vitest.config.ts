@@ -1,18 +1,12 @@
 import { defineConfig } from "vitest/config";
-import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 
-export default defineConfig(async () => {
-  const migrations = await readD1Migrations("./migrations");
-  return {
-    plugins: [
-      cloudflareTest({
-        main: "./src/index.ts",
-        wrangler: { configPath: "./wrangler.toml" },
-        miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations, ADMIN_KEY: "test-admin-key-0123456789abcdef0123456789" },
-        },
-      }),
-    ],
-    test: { setupFiles: ["./test/setup.ts"] },
-  };
+// Tests run in Node and drive the built worker (`worker-build --release`) inside Miniflare over HTTP.
+export default defineConfig({
+  test: {
+    environment: "node",
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
+    fileParallelism: false,
+    globalSetup: ["./test/global-setup.ts"],
+  },
 });

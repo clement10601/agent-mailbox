@@ -1,5 +1,7 @@
-.superpowers/
-node_modules/
-.wrangler/
 .dev.vars
+.superpowers/
+.wrangler/
+build/
+node_modules/
+target/
 worker-configuration.d.ts
