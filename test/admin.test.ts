@@ -42,6 +42,8 @@ describe("admin tools", () => {
         "admin_audit_log",
         "admin_set_block",
         "admin_revoke_oauth",
+        "admin_get_usage",
+        "admin_set_plan",
       ].sort()
     );
   });
@@ -50,7 +52,7 @@ describe("admin tools", () => {
     const k = await adm.ok("admin_create_agent", { name: "a" });
     const c = await new Client(w, k.key).init();
     expect((await c.toolNames()).sort()).toEqual(
-      ["whoami", "list_agents", "send_message", "check_inbox", "ack", "read_thread", "block_sender", "unblock_sender", "list_blocked", "update_profile"].sort()
+      ["whoami", "list_agents", "send_message", "check_inbox", "ack", "read_thread", "block_sender", "unblock_sender", "list_blocked", "update_profile", "get_usage"].sort()
     );
   });
 

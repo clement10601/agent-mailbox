@@ -7,6 +7,7 @@ pub enum ErrorCode {
     UnknownRecipient,
     Blocked,
     InboxFull,
+    QuotaExceeded,
     TooLarge,
     InvalidInput,
     InvalidReplyTo,
