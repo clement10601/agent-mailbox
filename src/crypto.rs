@@ -36,6 +36,11 @@ pub fn generate_key() -> String {
     format!("amk_{}", b64url(&random_bytes::<32>()))
 }
 
+/// A one-time binding code for the OAuth consent page: `amb_` followed by 32 random bytes, base64url.
+pub fn generate_binding_code() -> String {
+    format!("amb_{}", b64url(&random_bytes::<32>()))
+}
+
 /// 16 lowercase hex characters, for message, thread and key ids.
 pub fn new_id() -> String {
     hex(&random_bytes::<8>())

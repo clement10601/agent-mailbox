@@ -7,10 +7,12 @@ use worker::RateLimiter;
 use crate::auth::Identity;
 use crate::errors::{Error, ErrorCode, Result};
 use crate::oauth::Provider;
-use crate::store::{parse_iso, SendInput, Store, MAX_ACK_IDS};
+use crate::store::{iso, parse_iso, SendInput, Store, MAX_ACK_IDS};
 
 pub const AUDIT_DEFAULT_LIMIT: i64 = 100;
 pub const AUDIT_MAX_LIMIT: i64 = 1000;
+pub const BINDING_CODE_DEFAULT_MINUTES: i64 = 10;
+pub const BINDING_CODE_MAX_MINUTES: i64 = 60;
 const SEND_RETRY_AFTER_SECONDS: u32 = 60;
 
 pub struct ToolDef {
@@ -126,6 +128,22 @@ pub fn admin_tools() -> Vec<ToolDef> {
                 &["agent", "sender", "blocked"],
             ),
         ),
+        ToolDef {
+            name: "admin_create_binding_code",
+            description: format!(
+                "Mint a one-time code that binds a claude.ai connector (OAuth) to an agent. Paste it on the connector's \
+                 authorization page instead of the admin key. Single use, expires after ttl_minutes (default \
+                 {BINDING_CODE_DEFAULT_MINUTES}, max {BINDING_CODE_MAX_MINUTES}). The code is shown only once."
+            ),
+            schema: obj(
+                json!({
+                    "agent": s(AGENT_NAME),
+                    "create": { "type": "boolean", "description": "Create the agent when the code is used, if it does not exist yet." },
+                    "ttl_minutes": { "type": "integer", "description": format!("Minutes until the code expires (1-{BINDING_CODE_MAX_MINUTES}).") },
+                }),
+                &["agent"],
+            ),
+        },
         t(
             "admin_revoke_oauth",
             "Revoke one OAuth grant of an agent; its access and refresh tokens stop working. Grant ids come from admin_list_agents.",
@@ -286,6 +304,18 @@ pub async fn call(identity: &Identity, name: &str, a: &Map<String, Json>, cx: &C
                     store.unblock(&name, str_arg(a, "sender")).await?;
                 }
                 Ok(ok())
+            }
+            "admin_create_binding_code" => {
+                let minutes = opt_int(a, "ttl_minutes").unwrap_or(BINDING_CODE_DEFAULT_MINUTES);
+                if !(1..=BINDING_CODE_MAX_MINUTES).contains(&minutes) {
+                    return Err(Error::invalid(
+                        format!("ttl_minutes must be between 1 and {BINDING_CODE_MAX_MINUTES}."),
+                        "Pick a shorter lifetime; mint a new code when needed.",
+                    ));
+                }
+                let create = a.get("create").and_then(Json::as_bool).unwrap_or(false);
+                let (code, agent, expires_at) = store.create_binding_code(str_arg(a, "agent"), create, minutes * 60_000).await?;
+                Ok(json!({ "code": code, "agent": agent, "create": create, "expires_at": iso(expires_at) }))
             }
             "admin_revoke_oauth" => {
                 let agent = str_arg(a, "agent").trim().to_lowercase();

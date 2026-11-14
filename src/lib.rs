@@ -208,7 +208,7 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     };
     let r = store.cleanup(5000).await;
     let failed = if r.failed.is_empty() { String::new() } else { format!("; failed: {}", r.failed.join(", ")) };
-    worker::console_log!("cleanup: deleted {} messages, {} audit rows, {} sessions{}", r.messages, r.audit, r.sessions, failed);
+    worker::console_log!("cleanup: deleted {} messages, {} audit rows, {} sessions, {} binding codes{}", r.messages, r.audit, r.sessions, r.binding_codes, failed);
 }
 
 #[cfg(test)]

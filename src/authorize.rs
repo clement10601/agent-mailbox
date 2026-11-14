@@ -1,6 +1,7 @@
-//! The consent page for claude.ai connectors. GET renders a form (admin key, agent name, "create if missing");
-//! POST checks lockout, CSRF and the admin key before looking at the agent, then completes the authorization
-//! and redirects back to the client with a code. Only allowlisted redirect URIs are served.
+//! The consent page for claude.ai connectors. GET renders a form whose main field is a one-time binding code
+//! (from admin_create_binding_code); the admin key plus an agent name is a fallback. POST checks lockout and CSRF,
+//! then the credential, before looking at the agent; it completes the authorization and redirects back to the
+//! client with a code. Only allowlisted redirect URIs are served.
 
 use worker::{Request, Response};
 
@@ -61,6 +62,7 @@ fn shell(title: &str, inner: &str) -> String {
 body{{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5}}
 label{{display:block;margin-top:1rem;font-weight:600}}input{{width:100%;padding:.4rem;box-sizing:border-box}}
 label.check{{font-weight:400}}label.check input{{width:auto;margin-right:.4rem}}
+details{{margin-top:1.5rem}}summary{{cursor:pointer}}.hint{{font-size:.9rem}}
 button{{margin-top:1.5rem;padding:.5rem 1rem}}.error{{color:#b00020}}.muted{{color:#555}}
 </style></head><body>{}</body></html>"#,
         escape_html(title),
@@ -76,7 +78,7 @@ pub fn error_page(status: u16, message: &str, extra: &[(&str, String)]) -> Resul
     )
 }
 
-/// The page shows nothing about existing agents: it is served before the admin key is checked.
+/// The page shows nothing about existing agents: it is served before any credential is checked.
 fn form_page(action: &str, csrf: &str, client_name: &str, error: Option<&str>) -> String {
     shell(
         "Authorize Agent Mailbox",
@@ -86,11 +88,17 @@ fn form_page(action: &str, csrf: &str, client_name: &str, error: Option<&str>) -
 {}
 <form method="post" action="{}">
 <input type="hidden" name="csrf" value="{}">
+<label for="binding_code">Binding code</label>
+<input id="binding_code" name="binding_code" type="password" autocomplete="off" placeholder="amb_…">
+<p class="muted hint">Mint one with <code>admin_create_binding_code</code>. It picks the agent, works once and expires in minutes.</p>
+<details>
+<summary>Use the admin key instead</summary>
 <label for="admin_key">Admin key</label>
-<input id="admin_key" name="admin_key" type="password" autocomplete="current-password" required>
+<input id="admin_key" name="admin_key" type="password" autocomplete="current-password">
 <label for="agent">Agent name</label>
-<input id="agent" name="agent" type="text" required autocomplete="off" placeholder="lowercase letters, digits, hyphen">
+<input id="agent" name="agent" type="text" autocomplete="off" placeholder="lowercase letters, digits, hyphen">
 <label class="check"><input name="create" type="checkbox" value="1"> Create this agent if it doesn't exist</label>
+</details>
 <button type="submit">Authorize</button>
 </form>"#,
             escape_html(client_name),
@@ -152,21 +160,39 @@ pub async fn handle(mut req: Request, admin_key: Option<String>, store: &Store, 
         return error_page(403, "The form expired or was not submitted from this page. Reload and try again.", &[]);
     }
 
-    let key = match admin_key_problem(admin_key.as_deref()) {
-        None => admin_key.unwrap_or_default(),
-        Some(p) => {
-            worker::console_error!("authorize: {p}; answering 500");
-            return error_page(500, "The server is not configured.", &[]);
+    // Which agent, and whether a missing one may be created, comes from the binding code or the admin form.
+    let code = field("binding_code").trim().to_string();
+    let (agent_field, create, actor) = if !code.is_empty() {
+        match store.redeem_binding_code(&code).await? {
+            Some((agent, create)) => (agent, create, "binding_code"),
+            None => {
+                if !record_auth_failure(&ip, limiter, store).await? {
+                    return too_many();
+                }
+                return respond(401, Some(view(&cookie, Some("This binding code is wrong, expired or already used."))), &[]);
+            }
         }
+    } else {
+        if field("admin_key").is_empty() {
+            return respond(400, Some(view(&cookie, Some("Enter a binding code, or the admin key and an agent name."))), &[]);
+        }
+        let key = match admin_key_problem(admin_key.as_deref()) {
+            None => admin_key.unwrap_or_default(),
+            Some(p) => {
+                worker::console_error!("authorize: {p}; answering 500");
+                return error_page(500, "The server is not configured.", &[]);
+            }
+        };
+        if !timing_safe_eq(&field("admin_key"), &key) {
+            if !record_auth_failure(&ip, limiter, store).await? {
+                return too_many();
+            }
+            return respond(401, Some(view(&cookie, Some("Wrong admin key."))), &[]);
+        }
+        (field("agent"), field("create") == "1", "admin")
     };
-    if !timing_safe_eq(&field("admin_key"), &key) {
-        if !record_auth_failure(&ip, limiter, store).await? {
-            return too_many();
-        }
-        return respond(401, Some(view(&cookie, Some("Wrong admin key."))), &[]);
-    }
 
-    let agent = match valid_name(&field("agent")) {
+    let agent = match valid_name(&agent_field) {
         Ok(a) => a,
         Err(Error::Mailbox(e)) if e.code == ErrorCode::InvalidInput => return respond(400, Some(view(&cookie, Some(&e.message))), &[]),
         Err(e) => return Err(e),
@@ -175,7 +201,7 @@ pub async fn handle(mut req: Request, admin_key: Option<String>, store: &Store, 
         Some(AgentState::Disabled) => {
             return respond(400, Some(view(&cookie, Some(&format!("Agent \"{agent}\" is disabled.")))), &[]);
         }
-        None if field("create") != "1" => {
+        None if !create => {
             return respond(400, Some(view(&cookie, Some(&format!("Agent \"{agent}\" not found.")))), &[]);
         }
         None => {
@@ -193,7 +219,7 @@ pub async fn handle(mut req: Request, admin_key: Option<String>, store: &Store, 
     }
 
     let redirect_to = provider.complete_authorization(&auth_req, &agent).await?;
-    store.audit("oauth_granted", "admin", Some(&agent), Some(&auth_req.client_id)).await?;
+    store.audit("oauth_granted", actor, Some(&agent), Some(&auth_req.client_id)).await?;
     respond(
         302,
         None,
