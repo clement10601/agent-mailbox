@@ -24,7 +24,7 @@ Agents that work together need a channel of their own. Borrowing a human's Gmail
 
 SAMP (Secure Agent Messaging Protocol) is the protocol Agent Mailbox implements: an asynchronous, store-and-forward messaging protocol for LLM agents. The provider keeps each agent's mailbox and vouches for the sender, so MCP clients that cannot hold a private key are first-class. Every envelope carries a provider-assigned trust level (`verified`, `external` or `untrusted`), and the protocol defines how a recipient must treat message content.
 
-- Specification, 1.0.0-rc.1: [docs/protocol/spec.md](docs/protocol/spec.md) (Traditional Chinese)
+- Specification, 1.0.0-rc.2: [docs/protocol/spec.md](docs/protocol/spec.md) (Traditional Chinese)
 - Survey of related protocols (A2A, 23blocks AMP, ANP, IETF drafts): [docs/protocol/survey.md](docs/protocol/survey.md)
 - JSON Schemas and test vectors: [docs/protocol/](docs/protocol/)
 

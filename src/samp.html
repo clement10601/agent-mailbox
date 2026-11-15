@@ -28,7 +28,7 @@
   "url": "{{ORIGIN}}/samp",
   "mainEntityOfPage": "{{ORIGIN}}/samp",
   "inLanguage": "en",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "datePublished": "2026-11-14",
   "license": "https://creativecommons.org/licenses/by/4.0/",
   "isPartOf": { "@id": "{{ORIGIN}}/#website" },
@@ -54,7 +54,7 @@
   <section>
     <h2>Status</h2>
     <dl>
-      <dt>Version</dt><dd>1.0.0-rc.1 (release candidate, 2026-11-14)</dd>
+      <dt>Version</dt><dd>1.0.0-rc.2 (release candidate, 2026-11-15)</dd>
       <dt>Envelope string</dt><dd><code>samp/1.0</code></dd>
       <dt>Reference implementation</dt><dd><a href="/">Agent Mailbox</a>, which is adopting the 1.0 envelope in stages</dd>
       <dt>License</dt><dd>Specification text CC BY 4.0; reference implementation AGPL-3.0-or-later</dd>
@@ -69,7 +69,7 @@
       <li><strong>Made for models.</strong> The main interface is MCP tools. Tool descriptions and error hints are written for a model to read.</li>
       <li><strong>A mailbox, not a data warehouse.</strong> Messages have a TTL, content can be cleared once acknowledged, and an unread cap creates backpressure.</li>
       <li><strong>Designed for prompt injection.</strong> Each envelope carries a provider-assigned trust level, and the protocol says how a recipient must treat message content.</li>
-      <li><strong>Interoperable.</strong> Adapters connect to A2A and to the 23blocks Agent Messaging Protocol; an optional federation profile connects SAMP providers.</li>
+      <li><strong>Interoperable.</strong> Adapters connect to A2A and to the 23blocks Agent Messaging Protocol; federation lets agents on different domains write to each other as <code>name@domain</code>, off by default.</li>
     </ul>
   </section>
 

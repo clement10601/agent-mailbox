@@ -3,46 +3,185 @@
   "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/message.schema.json",
   "title": "SAMP 1.0 message (envelope + payload) as returned by a provider",
   "type": "object",
-  "required": ["version", "id", "thread_id", "from", "to", "subject", "sent_at", "trust", "body"],
+  "required": [
+    "version",
+    "id",
+    "thread_id",
+    "from",
+    "to",
+    "subject",
+    "sent_at",
+    "trust",
+    "body"
+  ],
   "properties": {
-    "version": { "type": "string", "pattern": "^samp/1\\.[0-9]+$" },
-    "id": { "$ref": "#/$defs/id" },
-    "thread_id": { "$ref": "#/$defs/id" },
-    "in_reply_to": { "$ref": "#/$defs/id" },
-    "from": { "$ref": "#/$defs/address" },
-    "to": { "$ref": "#/$defs/address" },
-    "subject": { "type": "string", "minLength": 1 },
-    "sent_at": { "type": "string", "format": "date-time" },
-    "expires_at": { "type": "string", "format": "date-time" },
-    "priority": { "enum": ["urgent", "high", "normal", "low"] },
-    "trust": { "enum": ["verified", "external", "untrusted"] },
-    "origin": { "$ref": "#/$defs/origin" },
-    "signature": { "$ref": "#/$defs/signature" },
-    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "kind": { "$ref": "#/$defs/kind" },
-    "body": { "type": "string", "minLength": 1 },
+    "version": {
+      "type": "string",
+      "pattern": "^samp/1\\.[0-9]+$"
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "thread_id": {
+      "$ref": "#/$defs/id"
+    },
+    "in_reply_to": {
+      "$ref": "#/$defs/id"
+    },
+    "from": {
+      "$ref": "#/$defs/address"
+    },
+    "to": {
+      "$ref": "#/$defs/address"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sent_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "priority": {
+      "enum": [
+        "urgent",
+        "high",
+        "normal",
+        "low"
+      ]
+    },
+    "trust": {
+      "enum": [
+        "verified",
+        "external",
+        "untrusted"
+      ]
+    },
+    "origin": {
+      "$ref": "#/$defs/origin"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "kind": {
+      "$ref": "#/$defs/kind"
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1
+    },
     "data": {},
-    "ext": { "type": "object" }
+    "ext": {
+      "type": "object"
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "trust": { "enum": ["external", "untrusted"] } }, "required": ["trust"] },
-      "then": { "required": ["origin"] }
+      "if": {
+        "properties": {
+          "trust": {
+            "enum": [
+              "external",
+              "untrusted"
+            ]
+          }
+        },
+        "required": [
+          "trust"
+        ]
+      },
+      "then": {
+        "required": [
+          "origin"
+        ]
+      }
     },
     {
-      "if": { "properties": { "kind": { "const": "task" } }, "required": ["kind"] },
-      "then": { "required": ["data"], "properties": { "data": { "$ref": "#/$defs/task" } } }
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "task"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/task"
+          }
+        }
+      }
     },
     {
-      "if": { "properties": { "kind": { "const": "result" } }, "required": ["kind"] },
-      "then": { "required": ["in_reply_to"] }
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "result"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "in_reply_to"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "samp:bounce"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "data",
+          "in_reply_to"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "bounce.schema.json"
+          },
+          "from": {
+            "const": "postmaster"
+          },
+          "trust": {
+            "const": "verified"
+          }
+        }
+      }
     }
   ],
   "$defs": {
-    "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
     "address": {
       "type": "string",
-      "pattern": "^[a-z0-9-]{1,32}(@[a-z0-9-]{1,32}\\.[a-z0-9-]+(\\.[a-z0-9-]+)+)?$"
+      "pattern": "^[a-z0-9-]{1,32}(@[a-z0-9-]+(\\.[a-z0-9-]+)+)?$"
     },
     "kind": {
       "type": "string",
@@ -50,50 +189,147 @@
     },
     "origin": {
       "type": "object",
-      "required": ["protocol", "from"],
+      "required": [
+        "protocol",
+        "from"
+      ],
       "properties": {
-        "protocol": { "type": "string" },
-        "from": { "type": "string" },
-        "id": { "type": "string" },
-        "provider": { "type": "string" },
-        "in_reply_to": { "type": "string" },
-        "signature_valid": { "type": "boolean" },
-        "received_at": { "type": "string", "format": "date-time" }
+        "protocol": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "in_reply_to": {
+          "type": "string"
+        },
+        "signature_valid": {
+          "type": "boolean"
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
     },
     "signature": {
       "type": "object",
-      "required": ["alg", "key_id", "value"],
+      "required": [
+        "alg",
+        "key_id",
+        "value"
+      ],
       "properties": {
-        "alg": { "const": "ed25519" },
-        "key_id": { "type": "string", "pattern": "^ed25519:[A-Za-z0-9_-]{16}$" },
-        "value": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+        "alg": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{16}$"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
       },
       "additionalProperties": false
     },
     "task": {
       "type": "object",
-      "required": ["goal", "output_format", "done_criteria"],
+      "required": [
+        "goal",
+        "output_format",
+        "done_criteria"
+      ],
       "properties": {
-        "goal": { "type": "string", "minLength": 1 },
-        "output_format": { "type": "string", "minLength": 1 },
-        "done_criteria": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-        "scope": { "type": "array", "items": { "type": "string" } },
-        "constraints": { "type": "array", "items": { "type": "string" } },
-        "donts": { "type": "array", "items": { "type": "string" } },
-        "deadline": { "type": "string", "format": "date-time" },
-        "context": { "type": "object" }
+        "goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "done_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "donts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deadline": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "context": {
+          "type": "object"
+        }
       }
     },
     "result": {
       "type": "object",
-      "required": ["status", "summary"],
+      "required": [
+        "status",
+        "summary"
+      ],
       "properties": {
-        "status": { "enum": ["done", "failed", "declined", "needs_input"] },
-        "summary": { "type": "string" },
+        "status": {
+          "enum": [
+            "done",
+            "failed",
+            "declined",
+            "needs_input"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
         "output": {},
-        "unmet_criteria": { "type": "array", "items": { "type": "string" } }
+        "unmet_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
+    },
+    "full_address": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,32}@[a-z0-9-]+(\\.[a-z0-9-]+)+$",
+      "maxLength": 286
+    },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)+$",
+      "maxLength": 253
+    },
+    "message_ref": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}@[a-z0-9-]+(\\.[a-z0-9-]+)+$"
     }
   }
 }

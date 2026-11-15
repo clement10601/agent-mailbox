@@ -10,7 +10,7 @@
       "description": "Known codes in SAMP 1.0; clients must tolerate unknown codes.",
       "examples": [
         "invalid_input", "invalid_reply_to", "unsupported_version", "unauthorized", "quota_exceeded",
-        "forbidden", "blocked", "not_found", "unknown_recipient", "conflict", "idempotency_conflict",
+        "forbidden", "blocked", "policy_rejected", "not_found", "unknown_recipient", "conflict", "idempotency_conflict",
         "inbox_full", "cursor_expired", "too_large", "rate_limited", "internal", "unavailable"
       ]
     },
