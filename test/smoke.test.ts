@@ -21,32 +21,34 @@ it("root describes the service", async () => {
   expect(text).toContain("/healthz");
 });
 
-it("pages carry SEO metadata on the public origin", async () => {
+it("pages carry SEO metadata", async () => {
   for (const path of ["/", "/samp"]) {
     const res = await w.fetch(path);
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain("Secure Agent Messaging Protocol");
-    expect(text).toContain(`<link rel="canonical" href="https://agent-mailbox.fezone.tw${path}">`);
+    expect(text).toMatch(new RegExp(`<link rel="canonical" href="https?://x${path}">`));
     expect(text).toContain("application/ld+json");
     expect(text).not.toContain("{{");
   }
 });
 
-it("robots.txt and sitemap.xml point at the public origin", async () => {
+it("robots.txt and sitemap.xml are served", async () => {
   const robots = await w.fetch("/robots.txt");
   expect(robots.headers.get("content-type")).toContain("text/plain");
   const body = await robots.text();
   expect(body).toContain("Disallow: /mcp");
-  expect(body).toContain("Sitemap: https://agent-mailbox.fezone.tw/sitemap.xml");
+  expect(body).toMatch(/Sitemap: https?:\/\/x\/sitemap\.xml/);
   const sitemap = await w.fetch("/sitemap.xml");
   expect(sitemap.headers.get("content-type")).toContain("xml");
-  expect(await sitemap.text()).toContain("<loc>https://agent-mailbox.fezone.tw/samp</loc>");
+  expect(await sitemap.text()).toMatch(/<loc>https?:\/\/x\/samp<\/loc>/);
 });
 
-it("without PUBLIC_ORIGIN the request origin is used", async () => {
-  const bare = await startWorker({ PUBLIC_ORIGIN: "" });
-  expect(await (await bare.fetch("/robots.txt")).text()).toMatch(/Sitemap: https?:\/\/x\/sitemap\.xml/);
+it("PUBLIC_ORIGIN replaces the request origin in absolute URLs", async () => {
+  const pub = await startWorker({ PUBLIC_ORIGIN: "https://mailbox.example.com" });
+  expect(await (await pub.fetch("/")).text()).toContain('<link rel="canonical" href="https://mailbox.example.com/">');
+  expect(await (await pub.fetch("/robots.txt")).text()).toContain("Sitemap: https://mailbox.example.com/sitemap.xml");
+  expect(await (await pub.fetch("/sitemap.xml")).text()).toContain("<loc>https://mailbox.example.com/samp</loc>");
 });
 
 it("migrations create all tables", async () => {
