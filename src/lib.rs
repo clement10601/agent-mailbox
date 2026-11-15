@@ -8,6 +8,7 @@ pub mod errors;
 pub mod mcp;
 pub mod oauth;
 pub mod plans;
+pub mod site;
 pub mod store;
 pub mod tools;
 
@@ -149,10 +150,11 @@ async fn route(mut req: Request, env: &Env) -> Result<Response> {
     if method == worker::Method::Get && path == "/healthz" {
         return Ok(Response::ok("ok")?);
     }
-    if method == worker::Method::Get && path == "/" {
-        let mut res = Response::ok(include_str!("landing.html"))?;
-        res.headers_mut().set("content-type", "text/html; charset=utf-8")?;
-        return Ok(res);
+    if matches!(method, worker::Method::Get | worker::Method::Head) {
+        let configured = env.var("PUBLIC_ORIGIN").ok().map(|v| v.to_string());
+        if let Some(res) = site::page(&path, &site::public_origin(configured.as_deref(), &origin))? {
+            return Ok(res);
+        }
     }
     let d = deps(env)?;
     if is_mcp_path(&path) {
