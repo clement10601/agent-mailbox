@@ -1,6 +1,6 @@
 # Agent 訊息協定調查（2026-11）
 
-> 狀態：草稿，2026-11-14。目的：在把 agent-mailbox 整理成一份協定規格之前，先看清楚已經有哪些協定、名稱是否衝突、我們的定位在哪裡。規格見 [spec.md](spec.md)。
+> 狀態：草稿，2026-11-14；2026-11-15 補充 Cloudflare agentic-inbox 與 QQ 邮箱 Agent Mail（§2.7）。目的：在把 agent-mailbox 整理成一份協定規格之前，先看清楚已經有哪些協定、名稱是否衝突、我們的定位在哪裡。規格見 [spec.md](spec.md)。
 >
 > **命名**：原本暫定的「Agentic Messaging Protocol（AMP）」與既有的 23blocks「Agent Messaging Protocol（AMP）」幾乎同名（見 §2.1），因此改名為 **SAMP（Secure Agent Messaging Protocol）**。另外留意：天文學界的 IVOA 有一個同縮寫的「Simple Application Messaging Protocol（SAMP）」，用於桌面天文軟體互通，領域不同、不易混淆，但對外介紹時建議寫全名。
 
@@ -47,7 +47,7 @@
 - 來源：<https://agent-network-protocol.com/>、<https://github.com/agent-network-protocol/AgentNetworkProtocol>。Apache-2.0，社群主導，目前規格 1.2；W3C 有社群組在討論，IETF 有以它為基礎的框架草案（`draft-zyyhl-agent-networks-framework`）。
 - 模型：三層——身分層（W3C DID，`did:wba`，端到端加密）、元協定層（Agent 協商要用什麼協定）、應用層（Agent 描述、發現）。1.2 版有完整的即時訊息 profile（直接訊息、群組、裝置綁定 E2EE、附件、聯邦）。
 - 與我們的差異：目標是「開放、跨網域的 Agent 網際網路」，身分去中心化、金鑰在 Agent 端。對單一擁有者的私人信箱來說過重，而且同樣不適合無法持有金鑰的 MCP 客戶端。
-- 結論：不採用，但身分層若日後要做跨網域聯邦，`did:web` 類的方式是可以借鏡的方向；SAMP 1.0 的聯邦改採「網域 + provider 簽章」（規格 §13）。
+- 結論：不採用，但身分層若日後要做跨網域聯邦，`did:web` 類的方式是可以借鏡的方向；SAMP 1.0 的聯邦改採「網域 + provider 簽章」（規格 §13；網域的發現文件相當於精簡版的 `did:web`）。
 
 ### 2.5 MCP（Model Context Protocol）
 
@@ -68,7 +68,15 @@
 
 ### 2.7 其他相關產品（非協定）
 
-- **AgentMail、Shipmail、Dead Simple Email**：給 Agent 真正的 email 信箱（SMTP／IMAP + REST + MCP）。好處是能跟人類收發；代價是沿用 email 的寄件者偽造、垃圾信問題，而且身分仍是「一個信箱」而非「一個 Agent」。我們刻意不走 SMTP。
+- **AgentMail、Shipmail、Dead Simple Email**：給 Agent 真正的 email 信箱（SMTP／IMAP + REST + MCP）。好處是能跟人類收發；代價是沿用 email 的寄件者偽造、垃圾信問題，而且身分仍是「一個信箱」而非「一個 Agent」。SAMP 的核心不走 SMTP，但位址刻意與 email 同形，並以轉接器與 email 互通（規格 §14.3）。
+- **Cloudflare Email Service 與 agentic-inbox**（2026-04，<https://github.com/cloudflare/agentic-inbox>，Apache-2.0）：Cloudflare 把 Email Routing（收）與 Email Sending（發）包成給 Agent 用的 email 基礎設施，並開源一個參考應用：跑在 Workers 上的自架 email 客戶端，每個信箱一個 Durable Object（內含 SQLite），附件放 R2，內建會讀信與擬稿的 AI 助理，並提供 MCP 端點。
+  - 它是「給人用、由 AI 協助」的真 email 信箱，不是 Agent 之間的協定。信任邊界只有一道 Cloudflare Access：通過的人（與經 MCP 接入的工具）可以操作**所有**信箱，沒有每個 Agent 各自的身分。它的 AI 擬稿一律要人確認才寄出。
+  - 對我們的意義：(1) agent-mailbox 同樣跑在 Workers 上，所以 Email Routing 是現成的 email 轉接路徑，同一個 `agent@domain` 可以同時收 SAMP 聯邦訊息與一般 email（規格 §14.3）；我們把它定位成**轉接**而非聯邦的傳輸方式，因為 email 沒有 provider 簽章、投遞識別碼與結構化內容的保證。(2)「每個信箱一個 Durable Object」是值得參考的儲存模式：信箱之間天然隔離，未讀上限與投遞可以在單一物件內序列化處理，不需要跨資料列的交易。目前的 D1 單庫在現階段夠用，這個模式記在聯邦實作計畫的後續選項裡。(3) 單一信任邊界正是我們不採用的模型：SAMP 的每個 Agent 有自己的憑證，`from` 由 provider 背書。
+- **QQ 邮箱 Agent Mail／Agently Mail**（腾讯，2026-06 起內測，<https://agent.qq.com/>；CLI 與 skill 在 <https://github.com/Tencent/AgentlyMail>，Apache-2.0）：QQ 邮箱團隊給 Agent 的專屬信箱，位址是 `<名稱>@agent.qq.com`，與使用者的個人信箱隔離。
+  - 介面是 CLI（`agently-cli`）加上 Agent Skill，不是 MCP；登入走 OAuth 裝置碼流程並以微信掃碼授權，Agent 拿不到使用者的密碼。功能是完整的 email：收信、搜尋、寄信、回覆、轉寄、附件。內測期間每日寄信上限 50 封，另有每小時與每分鐘的請求上限。
+  - 安全設計有兩點值得注意：信箱與個人信箱**隔離**（Agent 被注入時碰不到使用者自己的信）；寄信是**兩階段確認**（CLI 先回一個確認 token，帶回來才真的寄出），用來擋誤寄。
+  - 它是單一廠商的託管服務，底層是標準 email，所以跨廠商互通靠的是 SMTP 而不是新協定；Agent 的身分是「一個 email 位址」，寄件者驗證的強度就是 email 的 DKIM／DMARC。沒有信任等級標註、未讀背壓或交接合約。
+  - 對我們的意義：(1) 再次印證 `名稱@網域` 是使用者最容易理解的 Agent 位址，SAMP rc.2 的位址改成同一形狀。(2) 透過 email 轉接器，SAMP Agent 可以直接與 `@agent.qq.com` 的 Agent 通信，不需要對方支援 SAMP。(3) 兩階段確認對應 SAMP 的內容權限規則 5（核准走帶外通道）：我們把「對外寄信前要核准」放在 client 的政策層而不是協定層，但對 email 轉接明文建議第一次接觸的收件者要先取得使用者核准。(4) 寄信額度與請求頻率上限的做法與我們的額度、速率限制一致。
 - **各種 file-based agent mailbox skill**（本機 JSON 檔、同一台機器上的 Agent 互傳）：說明需求普遍，但都沒有跨機器與身分。
 - **FIPA ACL／KQML**（1990–2000 年代）：古典多 Agent 系統的訊息語言，提供 performative（request、inform、propose…）的概念。我們的 `kind` 欄位（規格 §6.5）取其精神但只保留少數幾種。
 
@@ -85,13 +93,14 @@
 | 訊息保存 | 不適用 | 本機優先，中繼 7 天 | 視實作 | 中繼 TTL，`ack` 即清內容 |
 | 背壓 | 無明確定義 | 佇列 TTL | 視 profile | 未讀上限 → `inbox_full` |
 | 注入防護 | 不在範圍 | 信任標註、隔離 | 不在範圍 | 伺服器標記來源 + 收件端隔離閱讀 + 內容權限規則 |
-| 跨 provider | 是 | 是（聯邦） | 是 | 選配（`federation:v1`，provider 簽章） |
+| 跨 provider | 是 | 是（聯邦） | 是 | 能力 `federation:v1`：`agent@domain` 定址、網域發現文件、provider 簽章、peer 與邀請；帳號預設關閉 |
 
 ### 刻意不做的事（非目標）
 
 - 不做任務生命週期（交給 A2A；我們只定義交接合約的資料格式）。
 - 不做即時串流與群組加密（交給 SLIM 之類）。
-- 聯邦不是核心：以選配的 `federation:v1` profile 提供，預設關閉。
+- 聯邦不是核心：以 `federation:v1` 能力提供並完整定義（規格 §13），但每個帳號預設關閉，開通要雙方管理者互加 peer。
+- 不把 email 當成傳輸層：與 email 的互通交給轉接器（規格 §14.3）。
 - 不做工具或技能的描述格式（交給 MCP／Agent Skills）。
 
 ## 4. 參考資料
@@ -103,3 +112,5 @@
 - IETF 草案：<https://datatracker.ietf.org/doc/draft-sharif-agent-transport-protocol/>、<https://datatracker.ietf.org/doc/draft-chapman-a2a-offline-delivery/>、<https://datatracker.ietf.org/doc/draft-mpsb-agntcy-slim/>
 - 草案彙整：<https://internet-of-agents.net/>
 - MCP：<https://modelcontextprotocol.io/>
+- Cloudflare Email for Agents：<https://blog.cloudflare.com/email-for-agents/>；agentic-inbox：<https://github.com/cloudflare/agentic-inbox>
+- QQ 邮箱 Agent Mail：<https://agent.qq.com/>；CLI 與 skill：<https://github.com/Tencent/AgentlyMail>；接入教學（Datawhale）：<https://zhuanlan.zhihu.com/p/2055060778491851008>

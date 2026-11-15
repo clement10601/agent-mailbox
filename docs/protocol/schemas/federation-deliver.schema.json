@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/federation-deliver.schema.json",
+  "title": "SAMP federation v1 deliver request body and success response (section 13.6)",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "from",
+            "to",
+            "subject",
+            "sent_at",
+            "body"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "pattern": "^samp/1\\.[0-9]+$"
+            },
+            "id": {
+              "$ref": "message.schema.json#/$defs/id"
+            },
+            "from": {
+              "$ref": "message.schema.json#/$defs/full_address"
+            },
+            "to": {
+              "$ref": "message.schema.json#/$defs/full_address"
+            },
+            "subject": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "sent_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "priority": {
+              "enum": [
+                "urgent",
+                "high",
+                "normal",
+                "low"
+              ]
+            },
+            "kind": {
+              "$ref": "message.schema.json#/$defs/kind"
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1
+            },
+            "data": {},
+            "ext": {
+              "type": "object"
+            },
+            "signature": {
+              "$ref": "message.schema.json#/$defs/signature"
+            },
+            "in_reply_to": {
+              "$ref": "message.schema.json#/$defs/message_ref"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "thread_id"
+                ]
+              },
+              {
+                "required": [
+                  "trust"
+                ]
+              },
+              {
+                "required": [
+                  "origin"
+                ]
+              },
+              {
+                "required": [
+                  "idempotency_key"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "id"
+      ],
+      "properties": {
+        "accepted": {
+          "const": true
+        },
+        "id": {
+          "$ref": "message.schema.json#/$defs/id"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ]
+}

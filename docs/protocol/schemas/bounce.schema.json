@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/bounce.schema.json",
+  "title": "SAMP bounce data (kind samp:bounce, section 13.8)",
+  "type": "object",
+  "required": [
+    "message_id",
+    "to",
+    "code"
+  ],
+  "properties": {
+    "message_id": {
+      "$ref": "message.schema.json#/$defs/id"
+    },
+    "to": {
+      "type": "string"
+    },
+    "code": {
+      "type": "string"
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_attempt_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "detail": {
+      "type": "string",
+      "maxLength": 200
+    }
+  }
+}

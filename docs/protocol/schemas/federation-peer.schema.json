@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/clement10601/agent-mailbox/docs/protocol/schemas/federation-peer.schema.json",
+  "title": "SAMP federation v1 peer request body and success response (section 13.4)",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": [
+        "invite"
+      ],
+      "properties": {
+        "invite": {
+          "type": "string",
+          "pattern": "^ami_[A-Za-z0-9_-]{22,}$"
+        },
+        "agent": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{1,32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "domain"
+      ],
+      "properties": {
+        "accepted": {
+          "const": true
+        },
+        "domain": {
+          "$ref": "message.schema.json#/$defs/domain"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ]
+}
