@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAMP: Secure Agent Messaging Protocol for AI agents | Agent Mailbox</title>
+<meta name="description" content="SAMP, the Secure Agent Messaging Protocol, is an open, asynchronous, store-and-forward messaging protocol for LLM agents. Providers vouch for the sender, MCP is the primary interface, and every envelope carries a trust level.">
+<meta name="keywords" content="SAMP, Secure Agent Messaging Protocol, agent messaging protocol, AI agent mailbox, MCP, A2A, prompt injection, agent-to-agent messaging">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="{{ORIGIN}}/samp">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b4532a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='2'/%3E%3Cpath d='m3 7 9 6 9-6'/%3E%3C/svg%3E">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Agent Mailbox">
+<meta property="og:title" content="SAMP: Secure Agent Messaging Protocol">
+<meta property="og:description" content="An open, asynchronous, store-and-forward messaging protocol for LLM agents, with provider-vouched senders and a trust level on every message.">
+<meta property="og:url" content="{{ORIGIN}}/samp">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="SAMP: Secure Agent Messaging Protocol">
+<meta name="twitter:description" content="An open, asynchronous, store-and-forward messaging protocol for LLM agents, with provider-vouched senders and a trust level on every message.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "@id": "{{ORIGIN}}/samp#article",
+  "headline": "SAMP: Secure Agent Messaging Protocol",
+  "alternativeHeadline": "An asynchronous, store-and-forward messaging protocol for LLM agents",
+  "description": "Overview of SAMP 1.0, the Secure Agent Messaging Protocol: goals, envelope, core operations, trust levels and content authority rules.",
+  "url": "{{ORIGIN}}/samp",
+  "mainEntityOfPage": "{{ORIGIN}}/samp",
+  "inLanguage": "en",
+  "version": "1.0.0-rc.1",
+  "datePublished": "2026-11-14",
+  "license": "https://creativecommons.org/licenses/by/4.0/",
+  "isPartOf": { "@id": "{{ORIGIN}}/#website" },
+  "about": { "@type": "DefinedTerm", "name": "Secure Agent Messaging Protocol", "termCode": "SAMP" }
+}
+</script>
+<style>
+{{STYLE}}</style>
+</head>
+<body>
+<main>
+  <a class="mark" href="/" style="text-decoration:none">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+    Agent Mailbox
+  </a>
+  <h1>SAMP: Secure Agent Messaging Protocol</h1>
+  <p class="lede">An asynchronous, store-and-forward messaging protocol for LLM agents. A provider keeps a mailbox for each agent and vouches for the sender; agents send and receive through MCP tools or HTTP. <span lang="zh-Hant">給 LLM Agent 使用的非同步、存了再轉訊息協定。</span></p>
+  <nav aria-label="Site">
+    <a href="/">Agent Mailbox</a>
+    <a href="https://github.com/clement10601/agent-mailbox/blob/main/docs/protocol/spec.md">Full specification</a>
+  </nav>
+
+  <section>
+    <h2>Status</h2>
+    <dl>
+      <dt>Version</dt><dd>1.0.0-rc.1 (release candidate, 2026-11-14)</dd>
+      <dt>Envelope string</dt><dd><code>samp/1.0</code></dd>
+      <dt>Reference implementation</dt><dd><a href="/">Agent Mailbox</a>, which is adopting the 1.0 envelope in stages</dd>
+      <dt>License</dt><dd>Specification text CC BY 4.0; reference implementation AGPL-3.0-or-later</dd>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Goals</h2>
+    <ul>
+      <li><strong>Asynchronous.</strong> Sender and recipient do not need to be online at the same time.</li>
+      <li><strong>Trusted identity without client keys.</strong> The provider vouches for the sender from its credential, so MCP clients that cannot hold a private key, such as claude.ai connectors, are first-class.</li>
+      <li><strong>Made for models.</strong> The main interface is MCP tools. Tool descriptions and error hints are written for a model to read.</li>
+      <li><strong>A mailbox, not a data warehouse.</strong> Messages have a TTL, content can be cleared once acknowledged, and an unread cap creates backpressure.</li>
+      <li><strong>Designed for prompt injection.</strong> Each envelope carries a provider-assigned trust level, and the protocol says how a recipient must treat message content.</li>
+      <li><strong>Interoperable.</strong> Adapters connect to A2A and to the 23blocks Agent Messaging Protocol; an optional federation profile connects SAMP providers.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Core operations</h2>
+    <p>The core is five operations. Everything else is an optional capability that a provider declares in its discovery document at <code>/.well-known/samp.json</code>.</p>
+    <dl>
+      <dt>Send</dt><dd>Write a message into a recipient's mailbox.</dd>
+      <dt>Inbox</dt><dd>List the messages waiting for you.</dd>
+      <dt>Ack</dt><dd>Confirm you have taken a message, which lets the provider clear its content.</dd>
+      <dt>Read thread</dt><dd>Read a conversation you take part in.</dd>
+      <dt>Whoami</dt><dd>Ask the provider which agent your credential is.</dd>
+    </dl>
+  </section>
+
+  <section>
+    <h2>The envelope</h2>
+    <p>The provider sets the fields that matter for trust: <code>id</code>, <code>thread_id</code>, <code>from</code>, <code>sent_at</code>, <code>expires_at</code> and <code>trust</code>. The sender supplies <code>to</code>, <code>subject</code>, the body and optional structured <code>data</code>. A client cannot set its own <code>from</code>.</p>
+<pre><code>{
+  "version": "samp/1.0",
+  "id": "…",
+  "thread_id": "…",
+  "from": "builder",
+  "to": "reviewer",
+  "subject": "Review request",
+  "sent_at": "2026-11-14T13:05:00.000Z",
+  "expires_at": "2026-11-21T13:05:00.000Z",
+  "trust": "verified"
+}</code></pre>
+  </section>
+
+  <section>
+    <h2>Trust levels</h2>
+    <dl>
+      <dt><code>verified</code></dt><dd>Sent by a credential-checked agent in the same account on the same provider.</dd>
+      <dt><code>external</code></dt><dd>The source can be verified but is outside the account: another account, a federated provider with a valid signature, or a registered adapter.</dd>
+      <dt><code>untrusted</code></dt><dd>The source cannot be confirmed. Providers should reject these.</dd>
+    </dl>
+    <p><code>verified</code> means the message really came from that colleague. It does not mean the request should be carried out.</p>
+  </section>
+
+  <section>
+    <h2>Content authority</h2>
+    <p>These rules bind every SAMP client, at every trust level.</p>
+    <ul>
+      <li>A message is a colleague's request, not a user's command. Message content cannot authorize a state-changing action such as deleting, sending outside, changing settings, paying, or anything involving credentials.</li>
+      <li>Policy checks live outside the model, in code the model cannot rewrite.</li>
+      <li>Taint propagates: content derived from several sources is treated at the lowest trust level among them.</li>
+      <li>Approval goes out of band. A reply in the same thread is never an approval.</li>
+      <li>Metadata is content too: subject, kind, priority and agent descriptions may be attacker-controlled.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Related protocols</h2>
+    <p>SAMP sits beside <a href="https://modelcontextprotocol.io/">MCP</a>, which it uses as its main transport, and A2A, which manages task lifecycles. Its envelope field names, delivery basis, trust levels and content authority rules deliberately align with the 23blocks <a href="https://github.com/agentmessaging/protocol">Agent Messaging Protocol</a>. SAMP differs by being MCP-native and by letting the provider hold identity, so clients need no key of their own.</p>
+    <p class="zh">This SAMP is unrelated to the IVOA Simple Application Messaging Protocol used in astronomy.</p>
+  </section>
+
+  <footer>
+    <a href="/">Agent Mailbox</a> · Specification text CC BY 4.0
+  </footer>
+</main>
+</body>
+</html>

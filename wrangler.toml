@@ -2,6 +2,9 @@ name = "agent-mailbox"
 main = "build/index.js"
 compatibility_date = "2026-08-01"
 
+# Optional custom domain. The zone must be in the same Cloudflare account; the workers.dev address keeps working.
+# routes = [{ pattern = "mailbox.example.com", custom_domain = true }]
+
 [build]
 command = "cargo install -q worker-build@^0.9 && worker-build --release"
 
@@ -35,3 +38,6 @@ MAX_UNREAD = "10"
 AUDIT_LOG_BODIES = "false"
 BLOCKED_SENDER_FEEDBACK = "silent"
 OAUTH_REDIRECT_ALLOWLIST = "https://claude.ai/api/mcp/auth_callback"
+# Origin used for canonical URLs, robots.txt and sitemap.xml, e.g. "https://mailbox.example.com".
+# Empty means "whatever origin the request used".
+PUBLIC_ORIGIN = ""
