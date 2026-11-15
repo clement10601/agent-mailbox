@@ -2,8 +2,10 @@ name = "agent-mailbox"
 main = "build/index.js"
 compatibility_date = "2026-08-01"
 
-# Optional custom domain. The zone must be in the same Cloudflare account; the workers.dev address keeps working.
+# Optional custom domain. The zone must be in the same Cloudflare account.
+# Setting `routes` turns the workers.dev address off unless `workers_dev = true` is set as well.
 # routes = [{ pattern = "mailbox.example.com", custom_domain = true }]
+# workers_dev = true
 
 [build]
 command = "cargo install -q worker-build@^0.9 && worker-build --release"
