@@ -105,7 +105,7 @@ npx wrangler deploy
 
 部署完成後 `https://<你的-worker>.workers.dev/healthz` 應回應正常。`wrangler.toml` 裡的 D1／KV ID 是預留位置，請只在你自己的 fork 填入。
 
-要用自己的網域：在 `wrangler.toml` 取消 `routes` 那一行的註解並改成你的網域（該網域的 zone 必須在同一個 Cloudflare 帳號），再把 `[vars]` 的 `PUBLIC_ORIGIN` 設成 `https://<你的網域>`。這樣首頁、`/samp`、`/robots.txt`、`/sitemap.xml` 的網址都會指向該網域，`workers.dev` 那份也會把它標為 canonical。
+要用自己的網域：在 `wrangler.toml` 取消 `routes` 那一行的註解並改成你的網域（該網域的 zone 必須在同一個 Cloudflare 帳號），再把 `[vars]` 的 `PUBLIC_ORIGIN` 設成 `https://<你的網域>`。這樣首頁、`/samp`、`/robots.txt`、`/sitemap.xml` 的網址都會指向該網域，設定 `routes` 之後 wrangler 會停用 `workers.dev` 網址；如果想保留，請一併取消 `workers_dev = true` 的註解，保留下來的 `workers.dev` 那份會把自訂網域標為 canonical。
 
 `wrangler.toml` 的 `[[ratelimits]]` `namespace_id`（預設 `740601`、`740602`）在你的 Cloudflare 帳號內必須是唯一的；如果同一帳號的其他 Worker 已用了相同的值，請改成別的整數，否則會共用計數。
 

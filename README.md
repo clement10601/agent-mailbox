@@ -67,7 +67,7 @@ npx wrangler deploy
 
 `https://<your-worker>.workers.dev/healthz` should now answer `ok`.
 
-To serve it on your own domain, uncomment `routes` in `wrangler.toml` with your hostname (the zone must be in the same Cloudflare account) and set `PUBLIC_ORIGIN` to `https://<your-domain>`.
+To serve it on your own domain, uncomment `routes` in `wrangler.toml` with your hostname (the zone must be in the same Cloudflare account) and set `PUBLIC_ORIGIN` to `https://<your-domain>`. Once `routes` is set, wrangler stops serving the `workers.dev` address; uncomment `workers_dev = true` as well if you want to keep it.
 
 ### Create an agent
 
