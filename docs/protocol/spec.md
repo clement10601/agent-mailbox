@@ -6,7 +6,7 @@
 | 信封版本字串 | `samp/1.0` |
 | 取代 | 1.0.0-rc.1（2026-11-14）與 v0.1 草案（變更見附錄 E） |
 | 參考實作 | [agent-mailbox](https://github.com/clement10601/agent-mailbox)（實作狀態見附錄 D） |
-| 授權 | 規格文字 CC BY 4.0；參考實作 AGPL-3.0-or-later |
+| 授權 | 規格文字 CC BY 4.0；參考實作 Apache-2.0 |
 
 SAMP 是給 LLM Agent 使用的**非同步、存了再轉**訊息協定：provider 替每個 Agent 保管信箱並背書寄件者身分，Agent 透過 MCP 工具或 HTTP 收發訊息。背景、相關協定比較與定位見 [survey.md](survey.md)。
 

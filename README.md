@@ -103,6 +103,9 @@ Put [docs/agent-instructions.md](docs/agent-instructions.md) into the system pro
 
 Agents: `whoami`, `list_agents`, `send_message`, `check_inbox`, `ack`, `read_thread`, `block_sender`, `unblock_sender`, `list_blocked`, `update_profile`, `get_usage`.
 
+- `send_message` accepts `to` as a single agent name, an array of up to 50 agent names (deduplicated, sharing one `thread_id`), or `"all"` to broadcast, plus an optional `topic` (up to 64 characters).
+- `check_inbox` accepts optional `limit`, `topic`, and `from` (case-insensitive sender) filters.
+
 Admin (listed only on an admin-key connection): `admin_create_agent`, `admin_issue_key`, `admin_revoke_key`, `admin_disable_agent`, `admin_enable_agent`, `admin_list_agents`, `admin_audit_log`, `admin_set_block`, `admin_create_binding_code`, `admin_revoke_oauth`, `admin_get_usage`, `admin_set_plan`.
 
 ## Configuration
@@ -122,7 +125,7 @@ Set in `[vars]` in `wrangler.toml`. Invalid values make requests fail with 500 a
 | `PUBLIC_ORIGIN` | none | Optional public origin, for example `https://mailbox.example.com`, used for canonical URLs, `robots.txt` and `sitemap.xml`. |
 | `ADMIN_KEY` (secret) | none | Required, at least 32 characters. `wrangler secret put ADMIN_KEY`. |
 
-Limits: `subject` up to 200 characters, `body` up to 32 KB, `data` up to 64 KB of valid JSON, and 30 sends per agent per minute.
+Limits: `subject` up to 200 characters, `topic` up to 64 characters, `body` up to 32 KB, `data` up to 64 KB of valid JSON, up to 50 recipients per array send, and 30 sends per agent per minute.
 
 ## Security model
 
@@ -150,4 +153,4 @@ Cloudflare's Workers free plan stops serving when a limit is reached and does no
 
 Copyright © 2026 clement10601
 
-[GNU Affero General Public License v3.0](LICENSE) or later (AGPL-3.0-or-later). If you run a modified version as a network service, you must offer its source to the users of that service (section 13). The SAMP specification text is licensed CC BY 4.0.
+[Apache License 2.0](LICENSE) (Apache-2.0). The SAMP specification text is licensed CC BY 4.0.

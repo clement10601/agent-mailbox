@@ -24,7 +24,7 @@ async function agents(worker: Worker, names: string[]): Promise<Record<string, C
   return out;
 }
 
-const msg = (to: string) => ({ to, subject: "hi", body: "x" });
+const msg = (to: string | string[]) => ({ to, subject: "hi", body: "x" });
 
 async function setSent(worker: Worker, n: number) {
   await worker.db
@@ -120,6 +120,18 @@ describe("plan limits", () => {
     const r = await a.ok("send_message", msg("all"));
     expect(r.delivered).toEqual(["b"]);
     expect(r.failed).toEqual([{ agent: "c", code: "quota_exceeded" }]);
+    expect((await a.ok("get_usage")).messages_sent).toBe(1000);
+  });
+
+  it("a multi-recipient array counts deduplicated deliveries and respects remaining quota", async () => {
+    const { a } = await agents(b, ["a", "b", "c"]);
+    await setSent(b, 999);
+    const r = await a.ok("send_message", msg(["b", "B", "c", "ghost"]));
+    expect(r.delivered).toEqual(["b"]);
+    expect(r.failed).toEqual([
+      { agent: "c", code: "quota_exceeded" },
+      { agent: "ghost", code: "unknown_recipient" },
+    ]);
     expect((await a.ok("get_usage")).messages_sent).toBe(1000);
   });
 

@@ -7,7 +7,7 @@ use worker::RateLimiter;
 use crate::auth::Identity;
 use crate::errors::{Error, ErrorCode, Result};
 use crate::oauth::Provider;
-use crate::store::{iso, parse_iso, SendInput, Store, DEFAULT_ACCOUNT, MAX_ACK_IDS};
+use crate::store::{iso, parse_iso, Recipients, SendInput, Store, DEFAULT_ACCOUNT, MAX_ACK_IDS, MAX_RECIPIENTS, MAX_TOPIC_CHARS};
 
 pub const AUDIT_DEFAULT_LIMIT: i64 = 100;
 pub const AUDIT_MAX_LIMIT: i64 = 1000;
@@ -39,14 +39,21 @@ pub fn agent_tools() -> Vec<ToolDef> {
         t("list_agents", "Active agents you can message: name and description.", obj(json!({}), &[])),
         t(
             "send_message",
-            "Send a message to an agent, or to \"all\" (every other active agent). Returns id, thread_id, delivered[] and failed[] ({agent, code}). Fails with quota_exceeded when the account's monthly message limit is used up.",
+            "Send a message to an agent, an array of agents, or \"all\" (every other active agent). Returns id, thread_id, delivered[] and failed[] ({agent, code}). Fails with quota_exceeded when the account's monthly message limit is used up.",
             obj(
                 json!({
-                    "to": s("Recipient agent name, or \"all\" to broadcast."),
+                    "to": {
+                        "description": format!("Recipient agent name, \"all\" to broadcast, or an array of up to {MAX_RECIPIENTS} recipient agent names."),
+                        "oneOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": MAX_RECIPIENTS },
+                        ],
+                    },
                     "subject": s("Subject, at most 200 characters."),
                     "body": s("Message text, at most 32 KiB (UTF-8)."),
                     "data": { "description": "Optional structured JSON payload, at most 64 KiB serialized." },
                     "reply_to": s("Id of a message you sent or received; the new message joins its thread."),
+                    "topic": s(&format!("Optional topic for categorizing and filtering messages, at most {MAX_TOPIC_CHARS} characters.")),
                 }),
                 &["to", "subject", "body"],
             ),
@@ -54,7 +61,14 @@ pub fn agent_tools() -> Vec<ToolDef> {
         t(
             "check_inbox",
             "Unread messages, oldest first. Does not mark them read; call ack when done.",
-            obj(json!({ "limit": { "type": "integer", "description": "Maximum number of messages; defaults to and is capped at MAX_UNREAD." } }), &[]),
+            obj(
+                json!({
+                    "limit": { "type": "integer", "description": "Maximum number of messages; defaults to and is capped at MAX_UNREAD." },
+                    "topic": s("Optional topic filter; returns only unread messages with this exact topic."),
+                    "from": s("Optional sender filter (agent name, case-insensitive)."),
+                }),
+                &[],
+            ),
         ),
         ToolDef {
             name: "ack",
@@ -186,6 +200,45 @@ fn type_ok(v: &Json, ty: &str) -> bool {
     }
 }
 
+fn validate_prop(k: &str, p: &Json, v: &Json) -> Result<()> {
+    let fail = |m: String| Err(Error::invalid(format!("Input validation error: {m}"), "Check the tool's input schema."));
+    if let Some(branches) = p["oneOf"].as_array() {
+        for b in branches {
+            if validate_prop(k, b, v).is_ok() {
+                return Ok(());
+            }
+        }
+        if v.is_array() {
+            if let Some(arr_branch) = branches.iter().find(|b| b["type"].as_str() == Some("array")) {
+                return validate_prop(k, arr_branch, v);
+            }
+        }
+        let types: Vec<&str> = branches.iter().filter_map(|b| b["type"].as_str()).collect();
+        return fail(format!("\"{k}\" must be of type {}", types.join(" or ")));
+    }
+    if let Some(ty) = p["type"].as_str() {
+        if !type_ok(v, ty) {
+            return fail(format!("\"{k}\" must be of type {ty}"));
+        }
+    }
+    if let (Some(items), Some(arr)) = (p["items"]["type"].as_str(), v.as_array()) {
+        if !arr.iter().all(|x| type_ok(x, items)) {
+            return fail(format!("every item of \"{k}\" must be of type {items}"));
+        }
+    }
+    if let (Some(min), Some(arr)) = (p["minItems"].as_u64(), v.as_array()) {
+        if (arr.len() as u64) < min {
+            return fail(format!("\"{k}\" must contain at least {min} item(s)"));
+        }
+    }
+    if let (Some(max), Some(arr)) = (p["maxItems"].as_u64(), v.as_array()) {
+        if arr.len() as u64 > max {
+            return fail(format!("\"{k}\" must contain at most {max} items"));
+        }
+    }
+    Ok(())
+}
+
 /// Validates `args` against the subset of JSON Schema the tool schemas use.
 pub fn validate(schema: &Json, args: &Map<String, Json>) -> Result<()> {
     let fail = |m: String| Err(Error::invalid(format!("Input validation error: {m}"), "Check the tool's input schema."));
@@ -200,21 +253,7 @@ pub fn validate(schema: &Json, args: &Map<String, Json>) -> Result<()> {
         if v.is_null() && !schema["required"].as_array().into_iter().flatten().any(|r| r == k) {
             continue;
         }
-        if let Some(ty) = p["type"].as_str() {
-            if !type_ok(v, ty) {
-                return fail(format!("\"{k}\" must be of type {ty}"));
-            }
-        }
-        if let (Some(items), Some(arr)) = (p["items"]["type"].as_str(), v.as_array()) {
-            if !arr.iter().all(|x| type_ok(x, items)) {
-                return fail(format!("every item of \"{k}\" must be of type {items}"));
-            }
-        }
-        if let (Some(max), Some(arr)) = (p["maxItems"].as_u64(), v.as_array()) {
-            if arr.len() as u64 > max {
-                return fail(format!("\"{k}\" must contain at most {max} items"));
-            }
-        }
+        validate_prop(k, p, v)?;
     }
     Ok(())
 }
@@ -264,16 +303,25 @@ pub async fn call(identity: &Identity, name: &str, a: &Map<String, Json>, cx: &C
                         SEND_RETRY_AFTER_SECONDS,
                     ));
                 }
+                let to = match a.get("to") {
+                    Some(Json::Array(arr)) => Recipients::Many(arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+                    _ => Recipients::Single(str_arg(a, "to").into()),
+                };
                 let input = SendInput {
-                    to: str_arg(a, "to").into(),
+                    to,
                     subject: str_arg(a, "subject").into(),
                     body: str_arg(a, "body").into(),
                     data: a.get("data").cloned(),
                     reply_to: opt_str(a, "reply_to"),
+                    topic: opt_str(a, "topic"),
                 };
                 Ok(serde_json::to_value(store.send(me, input).await?)?)
             }
-            "check_inbox" => Ok(json!({ "messages": store.inbox(me, opt_int(a, "limit")).await? })),
+            "check_inbox" => {
+                let topic = opt_str(a, "topic");
+                let from = opt_str(a, "from");
+                Ok(json!({ "messages": store.inbox(me, opt_int(a, "limit"), topic.as_deref(), from.as_deref()).await? }))
+            }
             "ack" => {
                 let ids: Vec<String> = a["ids"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
                 Ok(serde_json::to_value(store.ack(me, &ids).await?)?)
@@ -399,6 +447,12 @@ mod tests {
     fn validation() {
         let send = schema("send_message");
         assert!(validate(&send, &args(json!({"to":"a","subject":"s","body":"b","data":{"x":[1]}}))).is_ok());
+        assert!(validate(&send, &args(json!({"to":["a","b"],"subject":"s","body":"b","topic":"alerts"}))).is_ok());
+        assert!(validate(&send, &args(json!({"to":[],"subject":"s","body":"b"}))).is_err());
+        assert!(validate(&send, &args(json!({"to":[1],"subject":"s","body":"b"}))).is_err());
+        let many_to: Vec<String> = (0..51).map(|i| format!("a{i}")).collect();
+        assert!(validate(&send, &args(json!({"to":many_to,"subject":"s","body":"b"}))).is_err());
+        assert!(validate(&send, &args(json!({"to":"a","subject":"s","body":"b","topic":123}))).is_err());
         assert!(validate(&send, &args(json!({"to":"a","subject":"s"}))).is_err());
         assert!(validate(&send, &args(json!({"to":1,"subject":"s","body":"b"}))).is_err());
         assert!(validate(&send, &args(json!({"to":"a","subject":"s","body":"b","extra":1}))).is_err());
@@ -410,6 +464,9 @@ mod tests {
         let inbox = schema("check_inbox");
         assert!(validate(&inbox, &args(json!({"limit":2.5}))).is_err());
         assert!(validate(&inbox, &args(json!({"limit":3}))).is_ok());
+        assert!(validate(&inbox, &args(json!({"topic":"deploy","from":"a"}))).is_ok());
+        assert!(validate(&inbox, &args(json!({"topic":1}))).is_err());
+        assert!(validate(&inbox, &args(json!({"from":1}))).is_err());
         assert!(validate(&schema("admin_set_block"), &args(json!({"agent":"a","sender":"b","blocked":"yes"}))).is_err());
     }
 }

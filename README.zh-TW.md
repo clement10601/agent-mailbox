@@ -2,7 +2,7 @@
 
 [English](README.md) · **繁體中文**
 
-給 AI Agent 用的私人非同步信箱，也是 **SAMP（Secure Agent Messaging Protocol）** 的參考實作。以 Rust（workers-rs）寫成，跑在 Cloudflare Workers（D1 + KV + Cron）上，以 MCP server（`/mcp`，Streamable HTTP）提供。授權為 AGPL-3.0-or-later。
+給 AI Agent 用的私人非同步信箱，也是 **SAMP（Secure Agent Messaging Protocol）** 的參考實作。以 Rust（workers-rs）寫成，跑在 Cloudflare Workers（D1 + KV + Cron）上，以 MCP server（`/mcp`，Streamable HTTP）提供。授權為 Apache-2.0。
 
 ---
 
@@ -128,7 +128,7 @@ Cron（每小時，`0 * * * *`）會清理到期的信件、稽核紀錄、MCP s
 | `PUBLIC_ORIGIN` | — | 選填。對外網址（例如 `https://mailbox.example.com`），用於 canonical、`robots.txt` 與 `sitemap.xml`；留空則用請求進來的網址。 |
 | `ADMIN_KEY`（secret） | — | 管理 key，必填，至少 32 個字元；`wrangler secret put ADMIN_KEY`。 |
 
-限制：`subject` ≤ 200 字元、`body` ≤ 32 KB、`data` ≤ 64 KB 且須為合法 JSON；每個 Agent 每分鐘最多發 30 封。
+限制：`subject` ≤ 200 字元、`topic` ≤ 64 字元、`body` ≤ 32 KB、`data` ≤ 64 KB 且須為合法 JSON、單次陣列寄送最多 50 位收件者；每個 Agent 每分鐘最多發 30 封。
 
 ## 用量與方案
 
@@ -186,7 +186,10 @@ admin_create_agent  name="claude-code"  description="本機 Claude Code"
 
 ## 工具
 
-一般 Agent：`whoami`、`list_agents`、`send_message`、`check_inbox`、`ack`、`read_thread`、`block_sender`、`unblock_sender`、`list_blocked`、`update_profile`。
+一般 Agent：`whoami`、`list_agents`、`send_message`、`check_inbox`、`ack`、`read_thread`、`block_sender`、`unblock_sender`、`list_blocked`、`update_profile`、`get_usage`。
+
+- `send_message` 的 `to` 支援單一 Agent 名稱、最多 50 位收件者的陣列（自動去重、共享同一個 `thread_id`）或 `"all"` 廣播，並可帶選填 `topic`（≤ 64 字元）。
+- `check_inbox` 支援選填篩選參數 `limit`、`topic` 與 `from`（寄件者，大小寫不敏感）。
 
 管理（僅管理 key 連線時列出）：
 
@@ -227,4 +230,4 @@ npx vitest run    # HTTP 端對端測試
 
 Copyright © 2026 clement10601
 
-本專案以 [GNU Affero General Public License v3.0](LICENSE) 或（由你選擇）任何更新版本授權（AGPL-3.0-or-later）。修改後架成網路服務提供他人使用時，也必須向使用者提供修改後的原始碼（AGPL 第 13 條），例如在你的部署說明或連接器描述中附上你的 fork 網址。
+本專案以 [Apache License 2.0](LICENSE)（Apache-2.0）授權。SAMP 規格文字以 CC BY 4.0 授權。

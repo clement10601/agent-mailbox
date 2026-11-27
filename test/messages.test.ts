@@ -20,9 +20,9 @@ async function setup(worker: Worker = w, names = ["a", "b", "c"]): Promise<Agent
   return out;
 }
 
-const msg = (to: string, extra = {}) => ({ to, subject: "hi", body: "x", ...extra });
+const msg = (to: string | string[], extra = {}) => ({ to, subject: "hi", body: "x", ...extra });
 
-async function send(c: Client, to: string, extra = {}) {
+async function send(c: Client, to: string | string[], extra = {}) {
   return c.ok("send_message", msg(to, extra));
 }
 
@@ -378,5 +378,128 @@ describe("silent block does not leak", () => {
     const n = await w.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE from_agent = 'a'").first();
     expect(n.n).toBe(0);
     expect(await inbox(b)).toHaveLength(10);
+  });
+});
+
+describe("topic and inbox filtering", () => {
+  it("stores trimmed topic, returns it in inbox and read_thread, and treats blank as null", async () => {
+    const { a, b } = await setup();
+    const r1 = await send(a, "b", { topic: "  deploy/prod  ", subject: "s1" });
+    const r2 = await send(a, "b", { topic: "   ", subject: "s2" });
+    const r3 = await send(a, "b", { subject: "s3" });
+
+    const msgs = await inbox(b);
+    expect(msgs.map((m) => ({ id: m.id, topic: m.topic }))).toEqual([
+      { id: r1.id, topic: "deploy/prod" },
+      { id: r2.id, topic: null },
+      { id: r3.id, topic: null },
+    ]);
+
+    const t = await thread(b, r1.thread_id);
+    expect(t).toHaveLength(1);
+    expect(t[0].topic).toBe("deploy/prod");
+  });
+
+  it("rejects overly long or control-character topics", async () => {
+    const { a } = await setup();
+    await send(a, "b", { topic: "é".repeat(64) });
+    expect(await code(a, "send_message", msg("b", { topic: "é".repeat(65) }))).toBe("invalid_input");
+    expect(await code(a, "send_message", msg("b", { topic: "line1\nline2" }))).toBe("invalid_input");
+  });
+
+  it("filters check_inbox by topic, from (case-insensitive), and both with limit", async () => {
+    const { a, b, c } = await setup();
+    await send(a, "b", { topic: "alerts", subject: "a-alerts-1" });
+    await send(c, "b", { topic: "alerts", subject: "c-alerts-1" });
+    await send(a, "b", { topic: "digest", subject: "a-digest-1" });
+    await send(a, "b", { topic: "alerts", subject: "a-alerts-2" });
+    await send(c, "b", { subject: "c-none" });
+
+    const byTopic = (await b.ok("check_inbox", { topic: " alerts " })).messages;
+    expect(byTopic.map((m: any) => m.subject)).toEqual(["a-alerts-1", "c-alerts-1", "a-alerts-2"]);
+
+    const byFrom = (await b.ok("check_inbox", { from: " A " })).messages;
+    expect(byFrom.map((m: any) => m.subject)).toEqual(["a-alerts-1", "a-digest-1", "a-alerts-2"]);
+
+    const combined = (await b.ok("check_inbox", { topic: "alerts", from: "A", limit: 1 })).messages;
+    expect(combined.map((m: any) => m.subject)).toEqual(["a-alerts-1"]);
+
+    // Blank filter strings behave like no filter (backwards compatible).
+    const all = (await b.ok("check_inbox", { topic: "  ", from: "" })).messages;
+    expect(all).toHaveLength(5);
+  });
+});
+
+describe("multi-recipient send_message", () => {
+  it("delivers to multiple recipients sharing one thread_id and deduplicates case-insensitively", async () => {
+    const { a, b, c } = await setup();
+    const r = await send(a, [" B ", "c", "b"], { topic: "team-sync", subject: "standup" });
+    expect(r.delivered).toEqual(["b", "c"]);
+    expect(r.failed).toEqual([]);
+
+    const ib = await inbox(b);
+    const ic = await inbox(c);
+    expect(ib).toHaveLength(1);
+    expect(ic).toHaveLength(1);
+    expect(ib[0].id).toBe(r.id);
+    expect(ic[0].id).not.toBe(ib[0].id);
+    expect(ib[0].thread_id).toBe(r.thread_id);
+    expect(ic[0].thread_id).toBe(r.thread_id);
+    expect(ib[0].topic).toBe("team-sync");
+    expect(ic[0].topic).toBe("team-sync");
+
+    // Audit log records comma-joined targets and is searchable per recipient.
+    const adm = await admin(w);
+    const bLog = (await adm.ok("admin_audit_log", { agent: "b" })).entries;
+    expect(bLog[0]).toMatchObject({ event: "send", actor: "a", target: "b,c", subject: "standup" });
+  });
+
+  it("joins an existing thread when reply_to is set", async () => {
+    const { a, b, c } = await setup();
+    const first = await send(a, "b", { subject: "kickoff" });
+    const reply = await send(b, ["a", "c"], { reply_to: first.id, subject: "looping in c" });
+    expect(reply.thread_id).toBe(first.thread_id);
+    expect(reply.delivered).toEqual(["a", "c"]);
+    expect((await inbox(a))[0].thread_id).toBe(first.thread_id);
+    expect((await inbox(c))[0].thread_id).toBe(first.thread_id);
+  });
+
+  it("handles partial failures: unknown, disabled, inbox_full, and reject block", async () => {
+    const rej = await startWorker({ BLOCKED_SENDER_FEEDBACK: "reject" });
+    const { a, b, c } = await setup(rej, ["a", "b", "c", "d", "e"]);
+    await (await admin(rej)).ok("admin_disable_agent", { agent: "d" });
+    for (let i = 0; i < 10; i++) await send(a, "c");
+    await b.ok("block_sender", { agent: "a" });
+
+    const r = await send(a, ["e", "b", "c", "d", "ghost"]);
+    expect(r.delivered).toEqual(["e"]);
+    expect(r.failed).toEqual([
+      { agent: "b", code: "blocked" },
+      { agent: "c", code: "inbox_full" },
+      { agent: "d", code: "unknown_recipient" },
+      { agent: "ghost", code: "unknown_recipient" },
+    ]);
+  });
+
+  it("respects silent block without leaking in multi-recipient send", async () => {
+    const { a, b, c } = await setup();
+    await c.ok("block_sender", { agent: "a" });
+    const r = await send(a, ["b", "c"]);
+    expect(r.delivered).toEqual(["b", "c"]);
+    expect(r.failed).toEqual([]);
+    expect(await inbox(b)).toHaveLength(1);
+    expect(await inbox(c)).toEqual([]);
+  });
+
+  it("validates empty array, 'all' in array, invalid names, and >50 recipients", async () => {
+    const { a } = await setup();
+    expect(await code(a, "send_message", msg([]))).toBe("invalid_input");
+    expect(await code(a, "send_message", msg(["b", "all"]))).toBe("invalid_input");
+    expect(await code(a, "send_message", msg(["b", "ALL"]))).toBe("invalid_input");
+    expect(await code(a, "send_message", msg(["b", "bad name!"]))).toBe("invalid_input");
+    const tooMany = Array.from({ length: 51 }, (_, i) => `a${i}`);
+    expect(await code(a, "send_message", msg(tooMany))).toBe("invalid_input");
+    const n = await w.db.prepare("SELECT COUNT(*) AS n FROM messages").first();
+    expect(n.n).toBe(0);
   });
 });

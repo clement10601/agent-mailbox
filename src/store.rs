@@ -15,9 +15,11 @@ const TOUCH_INTERVAL_MS: i64 = 60_000;
 /// The account every agent belongs to until a deployment has more than one.
 pub const DEFAULT_ACCOUNT: &str = "default";
 pub const MAX_SUBJECT_CHARS: usize = 200;
+pub const MAX_TOPIC_CHARS: usize = 64;
 pub const MAX_BODY_BYTES: usize = 32_768;
 pub const MAX_DATA_BYTES: usize = 65_536;
 pub const MAX_ACK_IDS: usize = 50;
+pub const MAX_RECIPIENTS: usize = 50;
 /// Lifetime of a DELETE_ON_ACK tombstone that has no expiry of its own (MESSAGE_TTL_DAYS=0).
 const TOMBSTONE_TTL_MS: i64 = 7 * DAY_MS;
 /// Bindings outlive any realistic MCP session; an expired binding makes the client re-initialize.
@@ -97,6 +99,7 @@ pub struct Message {
     pub reply_to: Option<String>,
     pub from: String,
     pub to: String,
+    pub topic: Option<String>,
     pub subject: String,
     pub body: String,
     pub data: Option<Json>,
@@ -110,13 +113,14 @@ struct Row {
     reply_to: Option<String>,
     from_agent: String,
     to_agent: String,
+    topic: Option<String>,
     subject: Option<String>,
     body: Option<String>,
     data: Option<String>,
     created_at: f64,
 }
 
-const COLS: &str = "id, thread_id, reply_to, from_agent, to_agent, subject, body, data, created_at";
+const COLS: &str = "id, thread_id, reply_to, from_agent, to_agent, topic, subject, body, data, created_at";
 
 impl Row {
     fn into_message(self) -> Message {
@@ -126,6 +130,7 @@ impl Row {
             reply_to: self.reply_to,
             from: self.from_agent,
             to: self.to_agent,
+            topic: self.topic,
             subject: self.subject.unwrap_or_default(),
             body: self.body.unwrap_or_default(),
             data: self.data.and_then(|d| serde_json::from_str(&d).ok()),
@@ -216,12 +221,19 @@ pub struct CleanupResult {
     pub failed: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recipients {
+    Single(String),
+    Many(Vec<String>),
+}
+
 pub struct SendInput {
-    pub to: String,
+    pub to: Recipients,
     pub subject: String,
     pub body: String,
     pub data: Option<Json>,
     pub reply_to: Option<String>,
+    pub topic: Option<String>,
 }
 
 pub enum AgentState {
@@ -647,11 +659,8 @@ impl Store {
     pub async fn send(&self, from_raw: &str, input: SendInput) -> Result<SendResult> {
         let from = normalize_name(from_raw);
         let data_json = validate_send(&input)?;
-        let to = normalize_name(&input.to);
-        let broadcast = to == "all";
-        if !broadcast {
-            valid_name(&to)?;
-        }
+        let topic = validate_topic(input.topic.as_deref())?;
+        let explicit_recipients = resolve_recipient_list(&input.to)?;
         let now = now_ms();
         let (account, plan) = self.account_of(&from).await?;
         let usage_period = period(now);
@@ -693,14 +702,14 @@ impl Store {
             reply_to = Some(r.to_string());
         }
 
-        let recipients: Vec<String> = if broadcast {
-            self.all::<AgentListing>("SELECT name, '' AS description FROM agents WHERE disabled = 0 AND name != ? ORDER BY name", &[P::S(&from)])
+        let recipients: Vec<String> = match explicit_recipients {
+            Some(list) => list,
+            None => self
+                .all::<AgentListing>("SELECT name, '' AS description FROM agents WHERE disabled = 0 AND name != ? ORDER BY name", &[P::S(&from)])
                 .await?
                 .into_iter()
                 .map(|r| r.name)
-                .collect()
-        } else {
-            vec![to]
+                .collect(),
         };
 
         let expires_at = self.expiry(now);
@@ -745,14 +754,15 @@ impl Store {
             let id = new_id();
             first_id.get_or_insert_with(|| id.clone());
             stmts.push(self.stmt(
-                "INSERT INTO messages (id, thread_id, reply_to, from_agent, to_agent, subject, body, data, created_at, expires_at, suppressed)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages (id, thread_id, reply_to, from_agent, to_agent, topic, subject, body, data, created_at, expires_at, suppressed)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 &[
                     P::S(&id),
                     P::S(&thread_id),
                     opt(reply_to.as_deref()),
                     P::S(&from),
                     P::S(&r),
+                    opt(topic.as_deref()),
                     P::S(&input.subject),
                     P::S(&input.body),
                     opt(data_json.as_deref()),
@@ -783,18 +793,29 @@ impl Store {
         Ok(SendResult { id: first_id.unwrap_or_else(new_id), thread_id, delivered, failed })
     }
 
-    pub async fn inbox(&self, agent: &str, limit: Option<i64>) -> Result<Vec<Message>> {
+    pub async fn inbox(&self, agent: &str, limit: Option<i64>, topic: Option<&str>, from: Option<&str>) -> Result<Vec<Message>> {
         let max = self.config.max_unread as i64;
         let lim = limit.unwrap_or(max).clamp(1, max);
-        let rows: Vec<Row> = self
-            .all(
-                &format!(
-                    "SELECT {COLS} FROM messages WHERE to_agent = ? AND acked_at IS NULL AND suppressed = 0
-                     AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, rowid LIMIT ?"
-                ),
-                &[P::S(&normalize_name(agent)), P::I(now_ms()), P::I(lim)],
-            )
-            .await?;
+        let me = normalize_name(agent);
+        let now = now_ms();
+        let topic_filter = topic.map(str::trim).filter(|s| !s.is_empty());
+        let from_filter = from.map(normalize_name).filter(|s| !s.is_empty());
+        let mut sql = format!(
+            "SELECT {COLS} FROM messages WHERE to_agent = ? AND acked_at IS NULL AND suppressed = 0
+             AND (expires_at IS NULL OR expires_at > ?)"
+        );
+        let mut params: Vec<P<'_>> = vec![P::S(&me), P::I(now)];
+        if let Some(t) = topic_filter {
+            sql.push_str(" AND topic = ?");
+            params.push(P::S(t));
+        }
+        if let Some(ref f) = from_filter {
+            sql.push_str(" AND from_agent = ?");
+            params.push(P::S(f));
+        }
+        sql.push_str(" ORDER BY created_at, rowid LIMIT ?");
+        params.push(P::I(lim));
+        let rows: Vec<Row> = self.all(&sql, &params).await?;
         Ok(rows.into_iter().map(Row::into_message).collect())
     }
 
@@ -997,6 +1018,67 @@ impl Store {
     }
 }
 
+/// Trims and validates an optional topic. Empty/whitespace-only strings become None.
+pub fn validate_topic(raw: Option<&str>) -> Result<Option<String>> {
+    let Some(t) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if t.chars().count() > MAX_TOPIC_CHARS {
+        return Err(Error::invalid(
+            format!("topic must be a string of at most {MAX_TOPIC_CHARS} characters."),
+            "Shorten the topic.",
+        ));
+    }
+    if t.chars().any(char::is_control) {
+        return Err(Error::invalid(
+            "topic must not contain control characters.",
+            "Use printable characters only.",
+        ));
+    }
+    Ok(Some(t.to_string()))
+}
+
+/// Resolves `to` into either None (broadcast to "all") or a validated, deduplicated list of recipients.
+pub fn resolve_recipient_list(to: &Recipients) -> Result<Option<Vec<String>>> {
+    match to {
+        Recipients::Single(raw) => {
+            let n = normalize_name(raw);
+            if n == "all" {
+                return Ok(None);
+            }
+            valid_name(&n)?;
+            Ok(Some(vec![n]))
+        }
+        Recipients::Many(list) => {
+            if list.is_empty() {
+                return Err(Error::invalid("to must contain at least one recipient.", "Pass at least one agent name."));
+            }
+            if list.len() > MAX_RECIPIENTS {
+                return Err(Error::invalid(
+                    format!("to must contain at most {MAX_RECIPIENTS} recipients."),
+                    "Split the recipients into several calls.",
+                ));
+            }
+            let mut seen = std::collections::HashSet::with_capacity(list.len());
+            let mut out = Vec::with_capacity(list.len());
+            for raw in list {
+                let n = normalize_name(raw);
+                if n == "all" {
+                    return Err(Error::invalid(
+                        "Cannot include \"all\" in a recipient list.",
+                        "Pass \"all\" as a single string to broadcast, or list specific agent names.",
+                    ));
+                }
+                valid_name(&n)?;
+                if seen.insert(n.clone()) {
+                    out.push(n);
+                }
+            }
+            Ok(Some(out))
+        }
+    }
+}
+
 /// Checks subject/body/data sizes; returns the serialized data.
 pub fn validate_send(input: &SendInput) -> Result<Option<String>> {
     if input.subject.chars().count() > MAX_SUBJECT_CHARS {
@@ -1022,7 +1104,7 @@ mod tests {
     use super::*;
 
     fn input(subject: &str, body: &str, data: Option<Json>) -> SendInput {
-        SendInput { to: "x".into(), subject: subject.into(), body: body.into(), data, reply_to: None }
+        SendInput { to: Recipients::Single("x".into()), subject: subject.into(), body: body.into(), data, reply_to: None, topic: None }
     }
 
     #[test]
@@ -1047,5 +1129,31 @@ mod tests {
         let big = Json::String("a".repeat(MAX_DATA_BYTES));
         assert_eq!(validate_send(&input("", "", Some(big))).unwrap_err().code(), ErrorCode::TooLarge);
         assert_eq!(validate_send(&input("", "", Some(serde_json::json!({"n":1})))).unwrap(), Some("{\"n\":1}".into()));
+    }
+
+    #[test]
+    fn topic_validation() {
+        assert_eq!(validate_topic(None).unwrap(), None);
+        assert_eq!(validate_topic(Some("")).unwrap(), None);
+        assert_eq!(validate_topic(Some("   ")).unwrap(), None);
+        assert_eq!(validate_topic(Some("  deploy/prod ")).unwrap(), Some("deploy/prod".into()));
+        assert_eq!(validate_topic(Some(&"é".repeat(MAX_TOPIC_CHARS))).unwrap(), Some("é".repeat(MAX_TOPIC_CHARS)));
+        assert_eq!(validate_topic(Some(&"é".repeat(MAX_TOPIC_CHARS + 1))).unwrap_err().code(), ErrorCode::InvalidInput);
+        assert_eq!(validate_topic(Some("bad\ntopic")).unwrap_err().code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn recipient_list_resolution() {
+        assert_eq!(resolve_recipient_list(&Recipients::Single("ALL".into())).unwrap(), None);
+        assert_eq!(resolve_recipient_list(&Recipients::Single(" Agent-1 ".into())).unwrap(), Some(vec!["agent-1".into()]));
+        assert_eq!(
+            resolve_recipient_list(&Recipients::Many(vec!["B".into(), " a ".into(), "b".into(), "C".into()])).unwrap(),
+            Some(vec!["b".into(), "a".into(), "c".into()])
+        );
+        assert_eq!(resolve_recipient_list(&Recipients::Many(vec![])).unwrap_err().code(), ErrorCode::InvalidInput);
+        assert_eq!(resolve_recipient_list(&Recipients::Many(vec!["a".into(), "ALL".into()])).unwrap_err().code(), ErrorCode::InvalidInput);
+        assert_eq!(resolve_recipient_list(&Recipients::Many(vec!["bad name!".into()])).unwrap_err().code(), ErrorCode::InvalidInput);
+        let too_many: Vec<String> = (0..=MAX_RECIPIENTS).map(|i| format!("a{i}")).collect();
+        assert_eq!(resolve_recipient_list(&Recipients::Many(too_many)).unwrap_err().code(), ErrorCode::InvalidInput);
     }
 }
